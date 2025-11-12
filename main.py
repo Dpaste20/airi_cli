@@ -16,7 +16,7 @@ async def run_agent():
     sys_description = os.getenv("AGENT_SYSTEM_INSTRUCTION")
 
     agent = Agent(
-        model=Ollama(id="gemma3:1b"),
+        model=Ollama(id="llama3.2:1b"),
         description=sys_description,
         db=db,
         session_id="browser_session",
