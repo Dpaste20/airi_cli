@@ -35,7 +35,7 @@ async def run_agent():
         description=sys_description,
         db=db,
         knowledge=knowledge_base,
-        search_knowledge=True,
+        search_knowledge=False,
         session_id="browser_session",
         add_history_to_context=True,
         num_history_runs=10,
@@ -48,6 +48,13 @@ async def run_agent():
 
             if user_command.lower() == "exit":
                 break
+
+            if "@search_knowledge" in user_command:
+                agent.search_knowledge = True
+
+                user_command = user_command.replace("@search_knowledge", "").strip()
+            else:
+                agent.search_knowledge = False
 
             await agent.aprint_response(user_command, stream=True)
 
