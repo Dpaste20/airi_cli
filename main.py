@@ -1,18 +1,18 @@
 import asyncio
 import logging
 import os
-import random
 
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.knowledge.embedder.ollama import OllamaEmbedder
 from agno.knowledge.knowledge import Knowledge
-from agno.models.ollama import Ollama
-from agno.tools import tool
+from agno.models.google import Gemini
 from agno.vectordb.qdrant import Qdrant
 from dotenv import load_dotenv
 
-from utils.asciiArt import ascii_art
+from utils.AsciiArt import ascii_art
+from utils.GetBatteryStatus import get_battery_status
+from utils.GetRunningProcesses import get_running_processes
 
 logging.getLogger("agno").setLevel(logging.ERROR)
 load_dotenv()
@@ -35,13 +35,12 @@ async def run_agent():
     sys_description = os.getenv("AGENT_SYSTEM_INSTRUCTION")
 
     agent = Agent(
-        model=Ollama(id="llama3.2:1b"),
+        model=Gemini(id="gemini-flash-latest"),
         description=sys_description,
         db=db,
         knowledge=knowledge_base,
+        tools=[get_battery_status, get_running_processes],
         search_knowledge=False,
-        # tools=[get_weather],
-        session_id="browser_session",
         add_history_to_context=True,
         num_history_runs=10,
         markdown=True,
