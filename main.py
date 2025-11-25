@@ -10,7 +10,6 @@ from agno.models.google import Gemini
 from agno.vectordb.qdrant import Qdrant
 from dotenv import load_dotenv
 
-from utils.AsciiArt import ascii_art
 from utils.GetBatteryStatus import get_battery_status
 from utils.GetRunningProcesses import get_running_processes
 
