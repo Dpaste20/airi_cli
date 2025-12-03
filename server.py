@@ -15,13 +15,25 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from utils.FileSearch import file_search
 from utils.GetBatteryStatus import get_battery_status
+from utils.GetDiskSpace import get_disk_space
 from utils.GetRunningProcesses import get_running_processes
+from utils.GetSystemLogs import get_system_logs
+from utils.GetUptime import get_uptime
 
 logging.getLogger("agno").setLevel(logging.ERROR)
 load_dotenv()
 
 DB_PATH = "tmp/alpha.db"
+TOOLS = [
+    get_battery_status,
+    get_running_processes,
+    get_uptime,
+    get_disk_space,
+    get_system_logs,
+    file_search,
+]
 
 knowledge_base: Optional[Knowledge] = None
 storage_db: Optional[SqliteDb] = None
@@ -91,7 +103,7 @@ def get_agent(session_id: str, search_knowledge: bool) -> Agent:
         description=sys_description,
         db=storage_db,
         knowledge=knowledge_base,
-        tools=[get_battery_status, get_running_processes],
+        tools=TOOLS,
         search_knowledge=search_knowledge,
         add_history_to_context=True,
         num_history_runs=10,
