@@ -10,7 +10,6 @@ from agno.knowledge.embedder.ollama import OllamaEmbedder
 from agno.knowledge.knowledge import Knowledge
 from agno.models.ollama import Ollama
 from agno.vectordb.qdrant import Qdrant
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -21,6 +20,7 @@ from utils.GetDiskSpace import get_disk_space
 from utils.GetRunningProcesses import get_running_processes
 from utils.GetSystemLogs import get_system_logs
 from utils.GetUptime import get_uptime
+from utils.RagSearch import rag_search
 
 logging.getLogger("agno").setLevel(logging.ERROR)
 
@@ -33,6 +33,7 @@ TOOLS = [
     get_disk_space,
     get_system_logs,
     file_search,
+    rag_search,
 ]
 
 knowledge_base: Optional[Knowledge] = None
@@ -89,7 +90,7 @@ app.add_middleware(
 )
 
 
-def get_agent(session_id: str, search_knowledge: bool) -> Agent:
+def get_agent(session_id: str) -> Agent:
     if not storage_db or not knowledge_base:
         raise ValueError("Database or Knowledge Base not initialized")
 
@@ -102,7 +103,7 @@ def get_agent(session_id: str, search_knowledge: bool) -> Agent:
         db=storage_db,
         knowledge=knowledge_base,
         tools=TOOLS,
-        search_knowledge=search_knowledge,
+        search_knowledge=True,
         add_history_to_context=True,
         num_history_runs=10,
         markdown=True,
@@ -112,12 +113,10 @@ def get_agent(session_id: str, search_knowledge: bool) -> Agent:
 class ChatRequest(BaseModel):
     message: str
     session_id: str = "default_user"
-    search_knowledge: bool = False
 
 
 class ChatResponse(BaseModel):
     response: str
-    search_knowledge_used: bool
 
 
 @app.get("/")
@@ -131,15 +130,11 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=503, detail="System not initialized")
 
     try:
-        local_agent = get_agent(
-            session_id=request.session_id, search_knowledge=request.search_knowledge
-        )
+        local_agent = get_agent(session_id=request.session_id)
 
         response = await local_agent.arun(request.message)
 
-        return ChatResponse(
-            response=response.content, search_knowledge_used=request.search_knowledge
-        )
+        return ChatResponse(response=response.content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -158,20 +153,15 @@ async def websocket_chat(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
             message = data.get("message", "")
-            search_knowledge = data.get("search_knowledge", False)
             session_id = data.get("session_id", f"ws_{id(websocket)}")
 
             if not message:
                 continue
 
             try:
-                local_agent = get_agent(
-                    session_id=session_id, search_knowledge=search_knowledge
-                )
+                local_agent = get_agent(session_id=session_id)
 
-                await websocket.send_json(
-                    {"type": "start", "search_knowledge_used": search_knowledge}
-                )
+                await websocket.send_json({"type": "start"})
 
                 response_iterator = local_agent.arun(message, stream=True)
 
