@@ -8,7 +8,7 @@ from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.knowledge.embedder.ollama import OllamaEmbedder
 from agno.knowledge.knowledge import Knowledge
-from agno.models.google import Gemini
+from agno.models.ollama import Ollama
 from agno.vectordb.qdrant import Qdrant
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -23,7 +23,7 @@ from utils.GetSystemLogs import get_system_logs
 from utils.GetUptime import get_uptime
 
 logging.getLogger("agno").setLevel(logging.ERROR)
-load_dotenv()
+
 
 DB_PATH = "tmp/alpha.db"
 TOOLS = [
@@ -93,14 +93,12 @@ def get_agent(session_id: str, search_knowledge: bool) -> Agent:
     if not storage_db or not knowledge_base:
         raise ValueError("Database or Knowledge Base not initialized")
 
-    sys_description = os.getenv(
-        "AGENT_SYSTEM_INSTRUCTION", "You are a helpful assistant."
-    )
+    sys_msg = os.getenv("AGENT_SYSTEM_MESSAGE")
 
     return Agent(
         session_id=session_id,
-        model=Gemini(id="gemini-flash-latest"),
-        description=sys_description,
+        model=Ollama(id="ministral-3:3b"),
+        system_message=sys_msg,
         db=storage_db,
         knowledge=knowledge_base,
         tools=TOOLS,
