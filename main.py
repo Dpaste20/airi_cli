@@ -8,9 +8,8 @@ from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.knowledge.embedder.ollama import OllamaEmbedder
 from agno.knowledge.knowledge import Knowledge
-from agno.models.google import Gemini
+from agno.models.ollama import Ollama
 from agno.vectordb.qdrant import Qdrant
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -24,10 +23,9 @@ from utils.GetUptime import get_uptime
 from utils.RagSearch import rag_search
 
 logging.getLogger("agno").setLevel(logging.ERROR)
-load_dotenv()
+
 
 DB_PATH = "tmp/alpha.db"
-
 TOOLS = [
     get_battery_status,
     get_running_processes,
@@ -51,24 +49,44 @@ async def lifespan(app: FastAPI):
     storage_db = SqliteDb(db_file=DB_PATH)
 
     qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
+    # CHANGE 1: extracted collection name to a variable so we can use it for checks
+    collection_name = "airi_knowledge"
     vector_db = Qdrant(
-        collection="airi_knowledge",
+        collection=collection_name,
         url=qdrant_url,
         embedder=OllamaEmbedder(id="nomic-embed-text:v1.5", dimensions=768),
     )
-
     knowledge_base = Knowledge(vector_db=vector_db)
-
-    pdf_path = "tmp/test_sample.pdf"
+    # --- START OF NEW LOGIC ---
+    # Default to true (ingest if we don't know otherwise)
+    should_ingest = True
     try:
-        if os.path.exists(pdf_path):
-            await knowledge_base.add_content_async(path=pdf_path)
-            print("Knowledge base loaded from PDF.")
-        else:
-            print(f"Warning: PDF not found at {pdf_path}, skipping ingestion.")
+        # Check if the collection exists in Qdrant and has data (points)
+        if vector_db.client.collection_exists(collection_name):
+            collection_info = vector_db.client.get_collection(collection_name)
+            # If we have vectors, we don't need to re-embed
+            if collection_info.points_count > 0:
+                print(
+                    f"Knowledge base already contains {collection_info.points_count} vectors. Skipping ingestion."
+                )
+                should_ingest = False
     except Exception as e:
-        print(f"Warning: Issue loading PDF: {e}")
-
+        print(
+            f"Warning: Could not check Qdrant status, defaulting to ingestion. Error: {e}"
+        )
+    # Only run the expensive PDF loading if the DB is empty
+    if should_ingest:
+        pdf_path = "tmp/test_sample.pdf"
+        try:
+            if os.path.exists(pdf_path):
+                print(f"Ingesting {pdf_path}...")
+                await knowledge_base.add_content_async(path=pdf_path)
+                print("Knowledge base loaded from PDF.")
+            else:
+                print(f"Warning: PDF not found at {pdf_path}, skipping ingestion.")
+        except Exception as e:
+            print(f"Warning: Issue loading PDF: {e}")
+    # --- END OF NEW LOGIC ---
     print("System initialized successfully")
     yield
 
@@ -96,14 +114,12 @@ def get_agent(session_id: str) -> Agent:
     if not storage_db or not knowledge_base:
         raise ValueError("Database or Knowledge Base not initialized")
 
-    sys_description = os.getenv(
-        "AGENT_SYSTEM_INSTRUCTION", "You are a helpful assistant."
-    )
+    sys_msg = os.getenv("AGENT_SYSTEM_MESSAGE")
 
     return Agent(
         session_id=session_id,
-        model=Gemini(id="gemini-flash-latest"),
-        description=sys_description,
+        model=Ollama(id="ministral-3:3b"),
+        system_message=sys_msg,
         db=storage_db,
         knowledge=knowledge_base,
         tools=TOOLS,

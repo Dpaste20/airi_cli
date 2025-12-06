@@ -8,8 +8,10 @@ from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.knowledge.embedder.ollama import OllamaEmbedder
 from agno.knowledge.knowledge import Knowledge
-from agno.models.ollama import Ollama
+from agno.models.google import Gemini
+from agno.tools import tool
 from agno.vectordb.qdrant import Qdrant
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -23,9 +25,10 @@ from utils.GetUptime import get_uptime
 from utils.RagSearch import rag_search
 
 logging.getLogger("agno").setLevel(logging.ERROR)
-
+load_dotenv()
 
 DB_PATH = "tmp/alpha.db"
+
 TOOLS = [
     get_battery_status,
     get_running_processes,
@@ -49,23 +52,51 @@ async def lifespan(app: FastAPI):
     storage_db = SqliteDb(db_file=DB_PATH)
 
     qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
-    vector_db = Qdrant(
-        collection="airi_knowledge",
-        url=qdrant_url,
-        embedder=OllamaEmbedder(id="nomic-embed-text:v1.5", dimensions=768),
-    )
+    collection_name = "airi_knowledge"
 
+    vector_db = Qdrant(
+        collection=collection_name,
+        url=qdrant_url,
+        embedder=OllamaEmbedder(id="embeddinggemma:latest", dimensions=768),
+    )
     knowledge_base = Knowledge(vector_db=vector_db)
 
-    pdf_path = "tmp/test_sample.pdf"
+    # --- FIX: Set this to True to force adding new files ---
+    should_ingest = True
+
+    # Optional: Print current status, but don't stop ingestion
     try:
-        if os.path.exists(pdf_path):
-            await knowledge_base.add_content_async(path=pdf_path)
-            print("Knowledge base loaded from PDF.")
-        else:
-            print(f"Warning: PDF not found at {pdf_path}, skipping ingestion.")
+        if vector_db.client.collection_exists(collection_name):
+            info = vector_db.client.get_collection(collection_name)
+            print(f"Current DB status: {info.points_count} existing vectors.")
     except Exception as e:
-        print(f"Warning: Issue loading PDF: {e}")
+        print(f"Qdrant status check skipped: {e}")
+
+    if should_ingest:
+        # Define your files and metadata here
+        documents = [
+            {
+                "path": "tmp/test_sample.pdf",
+                "metadata": {"subject": "PS", "batch": 2026},
+            },
+            {
+                "path": "tmp/test_sample2.pdf",
+                "metadata": {"subject": "DP", "batch": 2026},
+            },
+        ]
+
+        for doc in documents:
+            path = doc["path"]
+            meta = doc["metadata"]
+
+            if os.path.exists(path):
+                print(f"Ingesting {path} with metadata {meta}...")
+                # The upsert logic in Agno usually handles duplicates,
+                # but this ensures the file is processed.
+                await knowledge_base.add_content_async(path=path, metadata=meta)
+                print(f"DONE: {path}")
+            else:
+                print(f"SKIPPING: File not found at {path}")
 
     print("System initialized successfully")
     yield
@@ -76,7 +107,7 @@ async def lifespan(app: FastAPI):
             os.remove(DB_PATH)
             print(f"Session database '{DB_PATH}' deleted.")
         except PermissionError:
-            print(f"Warning: Could not delete {DB_PATH} (file might be in use).")
+            print(f"Warning: Could not delete {DB_PATH}.")
 
 
 app = FastAPI(title="Agent API", lifespan=lifespan)
@@ -98,7 +129,7 @@ def get_agent(session_id: str) -> Agent:
 
     return Agent(
         session_id=session_id,
-        model=Ollama(id="ministral-3:3b"),
+        model=Gemini(id="gemini-flash-latest"),
         system_message=sys_msg,
         db=storage_db,
         knowledge=knowledge_base,
