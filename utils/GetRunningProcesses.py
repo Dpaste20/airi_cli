@@ -12,10 +12,6 @@ def get_running_processes(limit: int = 10) -> list:
         limit (int): The number of processes to return (default is 10).
     """
     try:
-        # Run 'ps' command to get process info
-        # -e: Select all processes
-        # -o: Output format (pid, user, cpu usage, memory usage, command name)
-        # --sort=-%cpu: Sort by CPU usage descending
         cmd = ["ps", "-eo", "pid,user,%cpu,%mem,comm", "--sort=-%cpu"]
 
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)

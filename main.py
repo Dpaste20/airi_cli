@@ -20,6 +20,7 @@ from utils.GetDiskSpace import get_disk_space
 from utils.GetRunningProcesses import get_running_processes
 from utils.GetSystemLogs import get_system_logs
 from utils.GetUptime import get_uptime
+from utils.KillProcess import kill_processes
 from utils.RagSearch import rag_search
 
 logging.getLogger("agno").setLevel(logging.ERROR)
@@ -34,6 +35,7 @@ TOOLS = [
     get_system_logs,
     file_search,
     rag_search,
+    kill_processes,
 ]
 
 knowledge_base: Optional[Knowledge] = None
@@ -44,27 +46,26 @@ storage_db: Optional[SqliteDb] = None
 async def lifespan(app: FastAPI):
     global knowledge_base, storage_db
 
-    print("Initializing system...")
+    print("Initializing system... \n igniting local LLM")
 
     storage_db = SqliteDb(db_file=DB_PATH)
 
     qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
-    # CHANGE 1: extracted collection name to a variable so we can use it for checks
+
     collection_name = "airi_knowledge"
     vector_db = Qdrant(
         collection=collection_name,
         url=qdrant_url,
-        embedder=OllamaEmbedder(id="nomic-embed-text:v1.5", dimensions=768),
+        embedder=OllamaEmbedder(id="embeddinggemma:latest", dimensions=768),
     )
     knowledge_base = Knowledge(vector_db=vector_db)
-    # --- START OF NEW LOGIC ---
-    # Default to true (ingest if we don't know otherwise)
+
     should_ingest = True
     try:
         # Check if the collection exists in Qdrant and has data (points)
         if vector_db.client.collection_exists(collection_name):
             collection_info = vector_db.client.get_collection(collection_name)
-            # If we have vectors, we don't need to re-embed
+
             if collection_info.points_count > 0:
                 print(
                     f"Knowledge base already contains {collection_info.points_count} vectors. Skipping ingestion."
@@ -74,7 +75,7 @@ async def lifespan(app: FastAPI):
         print(
             f"Warning: Could not check Qdrant status, defaulting to ingestion. Error: {e}"
         )
-    # Only run the expensive PDF loading if the DB is empty
+
     if should_ingest:
         pdf_path = "tmp/test_sample.pdf"
         try:
@@ -86,7 +87,7 @@ async def lifespan(app: FastAPI):
                 print(f"Warning: PDF not found at {pdf_path}, skipping ingestion.")
         except Exception as e:
             print(f"Warning: Issue loading PDF: {e}")
-    # --- END OF NEW LOGIC ---
+
     print("System initialized successfully")
     yield
 

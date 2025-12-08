@@ -22,6 +22,7 @@ from utils.GetDiskSpace import get_disk_space
 from utils.GetRunningProcesses import get_running_processes
 from utils.GetSystemLogs import get_system_logs
 from utils.GetUptime import get_uptime
+from utils.KillProcess import kill_processes
 from utils.RagSearch import rag_search
 
 logging.getLogger("agno").setLevel(logging.ERROR)
@@ -37,6 +38,7 @@ TOOLS = [
     get_system_logs,
     file_search,
     rag_search,
+    kill_processes,
 ]
 
 knowledge_base: Optional[Knowledge] = None
@@ -129,7 +131,7 @@ def get_agent(session_id: str) -> Agent:
 
     return Agent(
         session_id=session_id,
-        model=Gemini(id="gemini-flash-latest"),
+        model=Gemini(id="gemini-2.5-flash"),
         system_message=sys_msg,
         db=storage_db,
         knowledge=knowledge_base,
