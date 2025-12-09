@@ -1,23 +1,36 @@
+import json
 import os
+import subprocess
 
 from agno.tools import tool
+
+BINARY_PATH = os.path.join(os.getcwd(), "go-utils", "GetSystemLogs")
 
 
 @tool
 def get_system_logs(lines: int = 100) -> dict:
-    log_file = "/var/log/syslog"
+    """
+    Retrieves the last N lines from the system log (/var/log/syslog).
 
-    if not os.path.exists(log_file):
-        return {"error": "System log not found or inaccessible"}
+    Args:
+        lines (int): The number of lines to return (default is 100).
+    """
+    if not os.path.exists(BINARY_PATH):
+        return {"error": f"Binary not found at {BINARY_PATH}"}
 
     try:
-        # Read only the last N lines efficiently
-        with open(log_file, "r") as f:
-            data = f.readlines()[-lines:]
+        result = subprocess.run(
+            [BINARY_PATH, "-lines", str(lines)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
 
-        return {"lines_returned": len(data), "logs": [line.strip() for line in data]}
+        return json.loads(result.stdout)
 
-    except PermissionError:
-        return {"error": "Permission denied. Try running with sudo."}
+    except json.JSONDecodeError:
+        return {"error": "Failed to decode JSON from Go utility"}
+    except subprocess.CalledProcessError as e:
+        return {"error": f"Go utility failed: {e}"}
     except Exception as e:
         return {"error": str(e)}
