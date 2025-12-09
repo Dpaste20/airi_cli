@@ -1,36 +1,49 @@
-import logging
+import json
+import os
 import subprocess
 
 from agno.tools import tool
 
+BINARY_PATH = os.path.join(os.getcwd(), "go-utils", "FileSearch")
+
 
 @tool
 def file_search(query: str) -> str:
+    """
+    Searches for files matching the query string in the system.
+    Skips system directories (/proc, /sys) for speed.
+
+    Args:
+        query (str): The filename or part of the filename to search for.
+    """
+    if not os.path.exists(BINARY_PATH):
+        return f"Error: Binary not found at {BINARY_PATH}"
+
     try:
-        # print(f"DEBUG: Deep searching system for '*{query}*'...")
-
-        command = ["find", "/", "-type", "f", "-iname", f"*{query}*"]
-
         result = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            [BINARY_PATH, "-query", query, "-root", "/", "-timeout", "10"],
+            capture_output=True,
             text=True,
-            timeout=30,
+            check=True,
         )
-        found_files = result.stdout.strip()
-        if not found_files:
-            return f"No files found matching '*{query}*' in the entire system."
 
-        file_list = found_files.split("\n")
-        count = len(file_list)
-        if count > 20:
-            return f"Found {count} files. Here are the first 20:\n" + "\n".join(
-                file_list[:20]
-            )
-        return f"Found the following files:\n{found_files}"
-    except subprocess.TimeoutExpired:
-        return "Search timed out. Searching the entire root filesystem took too long. Try a more specific name."
+        data = json.loads(result.stdout)
+
+        files = data.get("files", [])
+        error = data.get("error", "")
+        count = data.get("count", 0)
+
+        response = ""
+        if error:
+            response += f"Note: {error}\n"
+
+        if not files:
+            return response + f"No files found matching '{query}'."
+
+        response += f"Found {count} files:\n" + "\n".join(files)
+        return response
+
+    except json.JSONDecodeError:
+        return "Error: Failed to parse search results."
     except Exception as e:
-        logging.error(f"Search tool error: {e}")
-        return f"An error occurred: {str(e)}"
+        return f"Search failed: {str(e)}"
