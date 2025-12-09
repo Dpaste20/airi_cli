@@ -119,7 +119,7 @@ def get_agent(session_id: str) -> Agent:
 
     return Agent(
         session_id=session_id,
-        model=Ollama(id="ministral-3:3b"),
+        model=Ollama(id="ministral-3:3b "),
         system_message=sys_msg,
         db=storage_db,
         knowledge=knowledge_base,

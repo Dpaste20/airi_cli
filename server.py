@@ -63,10 +63,8 @@ async def lifespan(app: FastAPI):
     )
     knowledge_base = Knowledge(vector_db=vector_db)
 
-    # --- FIX: Set this to True to force adding new files ---
     should_ingest = True
 
-    # Optional: Print current status, but don't stop ingestion
     try:
         if vector_db.client.collection_exists(collection_name):
             info = vector_db.client.get_collection(collection_name)
@@ -75,7 +73,6 @@ async def lifespan(app: FastAPI):
         print(f"Qdrant status check skipped: {e}")
 
     if should_ingest:
-        # Define your files and metadata here
         documents = [
             {
                 "path": "tmp/test_sample.pdf",
@@ -93,8 +90,7 @@ async def lifespan(app: FastAPI):
 
             if os.path.exists(path):
                 print(f"Ingesting {path} with metadata {meta}...")
-                # The upsert logic in Agno usually handles duplicates,
-                # but this ensures the file is processed.
+
                 await knowledge_base.add_content_async(path=path, metadata=meta)
                 print(f"DONE: {path}")
             else:
