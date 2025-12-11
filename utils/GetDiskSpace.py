@@ -1,21 +1,29 @@
-import shutil
+import json
+import os
+import subprocess
 
 from agno.tools import tool
+
+BINARY_PATH = os.path.join(os.getcwd(), "go-utils", "GetDiskSpace")
 
 
 @tool
 def get_disk_space() -> dict:
+    if not os.path.exists(BINARY_PATH):
+        return {"error": f"Binary not found at {BINARY_PATH}"}
+
     try:
-        total, used, free = shutil.disk_usage("/")
+        result = subprocess.run(
+            [BINARY_PATH],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return json.loads(result.stdout)
 
-        gb = 1024**3
-
-        return {
-            "total_GB": round(total / gb, 2),
-            "used_GB": round(used / gb, 2),
-            "free_GB": round(free / gb, 2),
-            "usage_percent": round((used / total) * 100, 2),
-        }
-
+    except json.JSONDecodeError:
+        return {"error": "Failed to decode JSON from Go utility"}
+    except subprocess.CalledProcessError as e:
+        return {"error": f"Go utility failed: {e}"}
     except Exception as e:
         return {"error": str(e)}

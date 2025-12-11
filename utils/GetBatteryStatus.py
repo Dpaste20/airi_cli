@@ -1,36 +1,32 @@
+import json
 import os
+import subprocess
 
 from agno.tools import tool
+
+BINARY_PATH = os.path.join(os.getcwd(), "go-utils", "GetBatteryStatus")
 
 
 @tool
 def get_battery_status() -> dict:
     """
-    Reads battery information from the Linux sysfs interface.
-    Returns a dictionary with percentage and status, or None if not found.
+    Retrieves battery status using the compiled Go utility.
     """
-    power_supply_path = "/sys/class/power_supply"
+    if not os.path.exists(BINARY_PATH):
+        return {"error": f"Binary not found at {BINARY_PATH}"}
 
-    if not os.path.exists(power_supply_path):
-        return {"error": "Battery information not available"}
+    try:
+        result = subprocess.run(
+            [BINARY_PATH],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return json.loads(result.stdout)
 
-    for item in os.listdir(power_supply_path):
-        if item.startswith("BAT"):
-            battery_path = os.path.join(power_supply_path, item)
-
-            try:
-                with open(os.path.join(battery_path, "capacity"), "r") as f:
-                    capacity = f.read().strip()
-
-                with open(os.path.join(battery_path, "status"), "r") as f:
-                    status = f.read().strip()
-
-                return {
-                    "battery_id": item,
-                    "percentage": int(capacity),
-                    "status": status,
-                }
-            except IOError:
-                continue
-
-    return {"error": "No battery found"}
+    except json.JSONDecodeError:
+        return {"error": "Failed to decode JSON from Go utility"}
+    except subprocess.CalledProcessError as e:
+        return {"error": f"Go utility failed: {e}"}
+    except Exception as e:
+        return {"error": str(e)}
