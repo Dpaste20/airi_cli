@@ -6,11 +6,7 @@ from typing import Optional
 
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
-from agno.knowledge.embedder.ollama import OllamaEmbedder
-from agno.knowledge.knowledge import Knowledge
 from agno.models.google import Gemini
-from agno.tools import tool
-from agno.vectordb.qdrant import Qdrant
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,7 +19,7 @@ from utils.GetRunningProcesses import get_running_processes
 from utils.GetSystemLogs import get_system_logs
 from utils.GetUptime import get_uptime
 from utils.KillProcess import kill_processes
-from utils.RagSearch import rag_search
+from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
 
 logging.getLogger("agno").setLevel(logging.ERROR)
 load_dotenv()
@@ -37,68 +33,21 @@ TOOLS = [
     get_disk_space,
     get_system_logs,
     file_search,
-    rag_search,
     kill_processes,
+    rag_search_tool,
 ]
 
-knowledge_base: Optional[Knowledge] = None
 storage_db: Optional[SqliteDb] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global knowledge_base, storage_db
-
-    print("Initializing system...")
-
+    global storage_db
+    print("Initializing Airi Backend...")
     storage_db = SqliteDb(db_file=DB_PATH)
-
-    qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
-    collection_name = "airi_knowledge"
-
-    vector_db = Qdrant(
-        collection=collection_name,
-        url=qdrant_url,
-        embedder=OllamaEmbedder(id="embeddinggemma:latest", dimensions=768),
-    )
-    knowledge_base = Knowledge(vector_db=vector_db)
-
-    should_ingest = True
-
-    try:
-        if vector_db.client.collection_exists(collection_name):
-            info = vector_db.client.get_collection(collection_name)
-            print(f"Current DB status: {info.points_count} existing vectors.")
-    except Exception as e:
-        print(f"Qdrant status check skipped: {e}")
-
-    if should_ingest:
-        documents = [
-            {
-                "path": "tmp/test_sample.pdf",
-                "metadata": {"subject": "PS", "batch": 2026},
-            },
-            {
-                "path": "tmp/test_sample2.pdf",
-                "metadata": {"subject": "DP", "batch": 2026},
-            },
-        ]
-
-        for doc in documents:
-            path = doc["path"]
-            meta = doc["metadata"]
-
-            if os.path.exists(path):
-                print(f"Ingesting {path} with metadata {meta}...")
-
-                await knowledge_base.add_content_async(path=path, metadata=meta)
-                print(f"DONE: {path}")
-            else:
-                print(f"SKIPPING: File not found at {path}")
-
+    await initialize_rag()
     print("System initialized successfully")
     yield
-
     print("\nCleaning up session...")
     if os.path.exists(DB_PATH):
         try:
@@ -108,7 +57,7 @@ async def lifespan(app: FastAPI):
             print(f"Warning: Could not delete {DB_PATH}.")
 
 
-app = FastAPI(title="Agent API", lifespan=lifespan)
+app = FastAPI(title="Airi Agent API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -120,17 +69,18 @@ app.add_middleware(
 
 
 def get_agent(session_id: str) -> Agent:
-    if not storage_db or not knowledge_base:
-        raise ValueError("Database or Knowledge Base not initialized")
+    if not storage_db:
+        raise ValueError("Database not initialized")
 
     sys_msg = os.getenv("AGENT_SYSTEM_MESSAGE")
+    kb = get_knowledge_base()
 
     return Agent(
         session_id=session_id,
         model=Gemini(id="gemini-2.5-flash"),
         system_message=sys_msg,
         db=storage_db,
-        knowledge=knowledge_base,
+        knowledge=kb,
         tools=TOOLS,
         search_knowledge=True,
         add_history_to_context=True,
@@ -150,19 +100,14 @@ class ChatResponse(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"message": "Agent API is running", "status": "healthy"}
+    return {"message": "Airi Agent API is running", "status": "healthy"}
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    if not knowledge_base:
-        raise HTTPException(status_code=503, detail="System not initialized")
-
     try:
         local_agent = get_agent(session_id=request.session_id)
-
         response = await local_agent.arun(request.message)
-
         return ChatResponse(response=response.content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -172,9 +117,8 @@ async def chat(request: ChatRequest):
 async def websocket_chat(websocket: WebSocket):
     await websocket.accept()
 
-    if knowledge_base is None:
-        print("Error: Knowledge base is None")
-        await websocket.send_json({"error": "System not initialized"})
+    if get_knowledge_base() is None:
+        await websocket.send_json({"error": "RAG System not initialized"})
         await websocket.close()
         return
 
@@ -189,7 +133,6 @@ async def websocket_chat(websocket: WebSocket):
 
             try:
                 local_agent = get_agent(session_id=session_id)
-
                 await websocket.send_json({"type": "start"})
 
                 response_iterator = local_agent.arun(message, stream=True)
