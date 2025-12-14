@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,6 +28,35 @@ const airiLogo = `
 
 
 
+`
+
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/url"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/gorilla/websocket"
+)
+
+const airiLogo = `
+	   ███████    ███             ███
+	 ███▒▒▒▒▒███  ▒▒▒             ▒▒▒
+	▒███    ▒███  ████  ████████  ████
+	▒███████████ ▒▒███ ▒▒███▒▒███▒▒███
+	▒███▒▒▒▒▒███  ▒███  ▒███ ▒▒▒  ▒███
+	▒███    ▒███  ▒███  ▒███      ▒███
+	█████   █████ █████ █████     █████
+	▒▒▒▒▒   ▒▒▒▒▒ ▒▒▒▒▒ ▒▒▒▒▒     ▒▒▒▒▒
 `
 
 var (
@@ -57,6 +87,8 @@ type model struct {
 	messages       []string
 	currentAiChunk string
 	err            error
+	spinner        spinner.Model
+	isLoading      bool
 }
 
 func initialModel(conn *websocket.Conn) model {
@@ -81,12 +113,18 @@ func initialModel(conn *websocket.Conn) model {
 		glamour.WithWordWrap(80),
 	)
 
+	s := spinner.New()
+	s.Spinner = spinner.MiniDot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("cyan"))
+
 	return model{
 		conn:      conn,
 		textInput: ti,
 		viewport:  vp,
 		renderer:  renderer,
 		messages:  []string{logoDisplay, welcomeMsg},
+		spinner:   s,
+		isLoading: false,
 	}
 }
 
@@ -126,7 +164,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, senderStyle.Render("You: ")+input)
 
 			m.currentAiChunk = ""
-			m.viewport.SetContent(strings.Join(m.messages, "\n"))
+			m.isLoading = true
+
+			content := strings.Join(m.messages, "\n")
+			header := aiStyle.Render("Airi:")
+			content += "\n" + header + " " + m.spinner.View()
+
+			m.viewport.SetContent(content)
 			m.viewport.GotoBottom()
 
 			req := ChatRequest{
@@ -143,7 +187,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			m.textInput.SetValue("")
-			return m, sendCmd
+			return m, tea.Batch(sendCmd, m.spinner.Tick)
 		}
 
 	case tea.WindowSizeMsg:
@@ -168,12 +212,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			renderedChunk := m.renderMarkdown(m.currentAiChunk)
 			header := aiStyle.Render("Airi:") + "\n"
 			content += "\n" + header + renderedChunk
+		} else if m.isLoading {
+			header := aiStyle.Render("Airi:")
+			content += "\n" + header + " " + m.spinner.View()
 		}
 		m.viewport.SetContent(content)
+
+	case spinner.TickMsg:
+		if m.isLoading {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+
+			if m.currentAiChunk == "" {
+				content := strings.Join(m.messages, "\n")
+				header := aiStyle.Render("Airi:")
+				content += "\n" + header + " " + m.spinner.View()
+				m.viewport.SetContent(content)
+				m.viewport.GotoBottom()
+			}
+
+			return m, cmd
+		}
 
 	case WSMessage:
 		switch msg.Type {
 		case "start":
+			m.isLoading = true
 
 		case "chunk":
 			m.currentAiChunk += msg.Content
@@ -192,18 +256,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.messages = append(m.messages, header+renderedContent)
 			m.currentAiChunk = ""
+			m.isLoading = false
 
 		case "error":
 			errMsg := errStyle.Render("Error: " + msg.Message)
 			m.messages = append(m.messages, errMsg)
 			m.viewport.SetContent(strings.Join(m.messages, "\n"))
 			m.viewport.GotoBottom()
+			m.isLoading = false
 
 		default:
 			if msg.Error != "" {
 				m.messages = append(m.messages, errStyle.Render("System Error: "+msg.Error))
 				m.viewport.SetContent(strings.Join(m.messages, "\n"))
 				m.viewport.GotoBottom()
+				m.isLoading = false
 			}
 		}
 
@@ -224,6 +291,7 @@ func (m model) View() string {
 	if m.err != nil {
 		return errStyle.Render(fmt.Sprintf("\nFatal Error: %v\nRestart the application.", m.err))
 	}
+
 	return fmt.Sprintf(
 		"%s\n\n%s",
 		m.viewport.View(),
