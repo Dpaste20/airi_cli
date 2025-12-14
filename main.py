@@ -21,7 +21,7 @@ from utils.GetRunningProcesses import get_running_processes
 from utils.GetSystemLogs import get_system_logs
 from utils.GetUptime import get_uptime
 from utils.KillProcess import kill_processes
-from utils.RagSearch import rag_search
+from utils.RagSearch import rag_search_tool
 
 logging.getLogger("agno").setLevel(logging.ERROR)
 
@@ -34,7 +34,7 @@ TOOLS = [
     get_disk_space,
     get_system_logs,
     file_search,
-    rag_search,
+    rag_search_tool,
     kill_processes,
 ]
 

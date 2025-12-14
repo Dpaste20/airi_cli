@@ -12,7 +12,9 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from utils.FileModify import file_modify
 from utils.FileSearch import file_search
+from utils.FileWrite import file_write
 from utils.GetBatteryStatus import get_battery_status
 from utils.GetDiskSpace import get_disk_space
 from utils.GetRunningProcesses import get_running_processes
@@ -35,6 +37,8 @@ TOOLS = [
     file_search,
     kill_processes,
     rag_search_tool,
+    file_write,
+    file_modify,
 ]
 
 storage_db: Optional[SqliteDb] = None

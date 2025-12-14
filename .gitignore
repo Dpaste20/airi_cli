@@ -7,6 +7,12 @@
 # Temporary folders
 tmp/
 
+
+
+Airi_created_files/
+qdrant_data/
+
+
 test.py
 
 # Python cache and compiled files
