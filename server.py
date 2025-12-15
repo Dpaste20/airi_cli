@@ -21,6 +21,7 @@ from utils.GetRunningProcesses import get_running_processes
 from utils.GetSystemLogs import get_system_logs
 from utils.GetUptime import get_uptime
 from utils.KillProcess import kill_processes
+from utils.OpenApplication import open_application
 from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
 
 logging.getLogger("agno").setLevel(logging.ERROR)
@@ -39,6 +40,7 @@ TOOLS = [
     rag_search_tool,
     file_write,
     file_modify,
+    open_application,
 ]
 
 storage_db: Optional[SqliteDb] = None
