@@ -16,6 +16,7 @@ from utils.FileModify import file_modify
 from utils.FileSearch import file_search
 from utils.FileWrite import file_write
 from utils.GetBatteryStatus import get_battery_status
+from utils.GetDateTime import get_current_datetime
 from utils.GetDiskSpace import get_disk_space
 from utils.GetRunningProcesses import get_running_processes
 from utils.GetSystemLogs import get_system_logs
@@ -41,6 +42,7 @@ TOOLS = [
     file_write,
     file_modify,
     open_application,
+    get_current_datetime,
 ]
 
 storage_db: Optional[SqliteDb] = None
