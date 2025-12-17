@@ -18,7 +18,7 @@ func main() {
 
 	info := DateTimeInfo{
 		CurrentTime: now.Format("15:04:05"),
-		// Fomatted date 16/04/2005
+
 		CurrentDate: now.Format("02/01/2006"),
 		DayOfWeek:   now.Weekday().String(),
 		Timezone:    now.Location().String(),
