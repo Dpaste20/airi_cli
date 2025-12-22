@@ -85,7 +85,7 @@ def get_agent(session_id: str) -> Agent:
 
     return Agent(
         session_id=session_id,
-        model=Gemini(id="gemini-2.5-flash"),
+        model=Gemini(id="gemini-flash-latest"),
         system_message=sys_msg,
         db=storage_db,
         knowledge=kb,

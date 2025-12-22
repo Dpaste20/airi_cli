@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import subprocess
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -14,19 +15,23 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from utils.FileModify import file_modify
 from utils.FileSearch import file_search
+from utils.FileWrite import file_write
 from utils.GetBatteryStatus import get_battery_status
+from utils.GetDateTime import get_current_datetime
 from utils.GetDiskSpace import get_disk_space
 from utils.GetRunningProcesses import get_running_processes
 from utils.GetSystemLogs import get_system_logs
 from utils.GetUptime import get_uptime
 from utils.KillProcess import kill_processes
-from utils.RagSearch import rag_search_tool
+from utils.OpenApplication import open_application
+from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
 
 logging.getLogger("agno").setLevel(logging.ERROR)
 
-
 DB_PATH = "tmp/alpha.db"
+
 TOOLS = [
     get_battery_status,
     get_running_processes,
@@ -34,73 +39,35 @@ TOOLS = [
     get_disk_space,
     get_system_logs,
     file_search,
-    rag_search_tool,
     kill_processes,
+    rag_search_tool,
+    file_write,
+    file_modify,
+    open_application,
+    get_current_datetime,
 ]
 
-knowledge_base: Optional[Knowledge] = None
 storage_db: Optional[SqliteDb] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global knowledge_base, storage_db
-
-    print("Initializing system... \n igniting local LLM")
-
+    global storage_db
+    print("Initializing Airi Backend...")
     storage_db = SqliteDb(db_file=DB_PATH)
-
-    qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
-
-    collection_name = "airi_knowledge"
-    vector_db = Qdrant(
-        collection=collection_name,
-        url=qdrant_url,
-        embedder=OllamaEmbedder(id="embeddinggemma:latest", dimensions=768),
-    )
-    knowledge_base = Knowledge(vector_db=vector_db)
-
-    should_ingest = True
-    try:
-        # Check if the collection exists in Qdrant and has data (points)
-        if vector_db.client.collection_exists(collection_name):
-            collection_info = vector_db.client.get_collection(collection_name)
-
-            if collection_info.points_count > 0:
-                print(
-                    f"Knowledge base already contains {collection_info.points_count} vectors. Skipping ingestion."
-                )
-                should_ingest = False
-    except Exception as e:
-        print(
-            f"Warning: Could not check Qdrant status, defaulting to ingestion. Error: {e}"
-        )
-
-    if should_ingest:
-        pdf_path = "tmp/test_sample.pdf"
-        try:
-            if os.path.exists(pdf_path):
-                print(f"Ingesting {pdf_path}...")
-                await knowledge_base.add_content_async(path=pdf_path)
-                print("Knowledge base loaded from PDF.")
-            else:
-                print(f"Warning: PDF not found at {pdf_path}, skipping ingestion.")
-        except Exception as e:
-            print(f"Warning: Issue loading PDF: {e}")
-
+    await initialize_rag()
     print("System initialized successfully")
     yield
-
     print("\nCleaning up session...")
     if os.path.exists(DB_PATH):
         try:
             os.remove(DB_PATH)
             print(f"Session database '{DB_PATH}' deleted.")
         except PermissionError:
-            print(f"Warning: Could not delete {DB_PATH} (file might be in use).")
+            print(f"Warning: Could not delete {DB_PATH}.")
 
 
-app = FastAPI(title="Agent API", lifespan=lifespan)
+app = FastAPI(title="Airi Agent API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -112,17 +79,21 @@ app.add_middleware(
 
 
 def get_agent(session_id: str) -> Agent:
-    if not storage_db or not knowledge_base:
-        raise ValueError("Database or Knowledge Base not initialized")
+    if not storage_db:
+        raise ValueError("Database not initialized")
 
     sys_msg = os.getenv("AGENT_SYSTEM_MESSAGE")
 
+    kb = get_knowledge_base()
+
     return Agent(
         session_id=session_id,
-        model=Ollama(id="ministral-3:3b "),
+        model=Ollama(
+            id="qwen3:airi",
+        ),
         system_message=sys_msg,
         db=storage_db,
-        knowledge=knowledge_base,
+        knowledge=kb,
         tools=TOOLS,
         search_knowledge=True,
         add_history_to_context=True,
@@ -140,20 +111,26 @@ class ChatResponse(BaseModel):
     response: str
 
 
+def speak_response(text: str):
+    """Executes spd-say to read the text aloud."""
+    try:
+        subprocess.Popen(["spd-say", text])
+    except Exception as e:
+        print(f"Error executing spd-say: {e}")
+
+
 @app.get("/")
 async def root():
-    return {"message": "Agent API is running", "status": "healthy"}
+    return {"message": "Airi Agent API is running", "status": "healthy"}
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    if not knowledge_base:
-        raise HTTPException(status_code=503, detail="System not initialized")
-
     try:
         local_agent = get_agent(session_id=request.session_id)
-
         response = await local_agent.arun(request.message)
+
+        speak_response(response.content)
 
         return ChatResponse(response=response.content)
     except Exception as e:
@@ -164,9 +141,8 @@ async def chat(request: ChatRequest):
 async def websocket_chat(websocket: WebSocket):
     await websocket.accept()
 
-    if knowledge_base is None:
-        print("Error: Knowledge base is None")
-        await websocket.send_json({"error": "System not initialized"})
+    if get_knowledge_base() is None:
+        await websocket.send_json({"error": "RAG System not initialized"})
         await websocket.close()
         return
 
@@ -181,10 +157,11 @@ async def websocket_chat(websocket: WebSocket):
 
             try:
                 local_agent = get_agent(session_id=session_id)
-
                 await websocket.send_json({"type": "start"})
 
                 response_iterator = local_agent.arun(message, stream=True)
+
+                full_response_text = ""
 
                 async for chunk in response_iterator:
                     content = ""
@@ -194,7 +171,11 @@ async def websocket_chat(websocket: WebSocket):
                         content = chunk
 
                     if content:
+                        full_response_text += content
                         await websocket.send_json({"type": "chunk", "content": content})
+
+                if full_response_text:
+                    speak_response(full_response_text)
 
                 await websocket.send_json({"type": "end"})
 
