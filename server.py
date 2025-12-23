@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import subprocess
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -106,6 +107,13 @@ class ChatResponse(BaseModel):
     response: str
 
 
+def speak_response(text: str):
+    try:
+        subprocess.Popen(["spd-say", text])
+    except Exception as e:
+        print(f"Error executing spd-say: {e}")
+
+
 @app.get("/")
 async def root():
     return {"message": "Airi Agent API is running", "status": "healthy"}
@@ -145,6 +153,8 @@ async def websocket_chat(websocket: WebSocket):
 
                 response_iterator = local_agent.arun(message, stream=True)
 
+                full_response_text = ""
+
                 async for chunk in response_iterator:
                     content = ""
                     if hasattr(chunk, "content") and chunk.content:
@@ -153,7 +163,11 @@ async def websocket_chat(websocket: WebSocket):
                         content = chunk
 
                     if content:
+                        full_response_text += content
                         await websocket.send_json({"type": "chunk", "content": content})
+
+                if full_response_text:
+                    speak_response(full_response_text)
 
                 await websocket.send_json({"type": "end"})
 
