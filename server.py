@@ -8,6 +8,7 @@ from typing import Optional
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.models.google import Gemini
+from agno.tools.duckduckgo import DuckDuckGoTools
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +45,7 @@ TOOLS = [
     file_modify,
     open_application,
     get_current_datetime,
+    DuckDuckGoTools(),
 ]
 
 storage_db: Optional[SqliteDb] = None
