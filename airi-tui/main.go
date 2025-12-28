@@ -6,38 +6,7 @@ import (
 	"log"
 	"net/url"
 	"strings"
-
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/gorilla/websocket"
-)
-
-const airiLogo = `
-	   ███████    ███             ███
-	 ███▒▒▒▒▒███  ▒▒▒             ▒▒▒
-	▒███    ▒███  ████  ████████  ████
-	▒███████████ ▒▒███ ▒▒███▒▒███▒▒███
-	▒███▒▒▒▒▒███  ▒███  ▒███ ▒▒▒  ▒███
-	▒███    ▒███  ▒███  ▒███      ▒███
-	█████   █████ █████ █████     █████
-	▒▒▒▒▒   ▒▒▒▒▒ ▒▒▒▒▒ ▒▒▒▒▒     ▒▒▒▒▒
-
-
-
-`
-
-package main
-
-import (
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/url"
-	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -64,6 +33,26 @@ var (
 	aiStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
 	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
 	infoStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
+
+	statusBarStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("236")).
+			Padding(0, 1)
+
+	statusConnectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("42")).
+				Bold(true)
+
+	statusDisconnectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("196")).
+				Bold(true)
+
+	statusLabelStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("240"))
+
+	statusValueStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255")).
+				Bold(true)
 )
 
 type ChatRequest struct {
@@ -89,13 +78,19 @@ type model struct {
 	err            error
 	spinner        spinner.Model
 	isLoading      bool
+	sessionID      string
+	connected      bool
+	messageCount   int
+	startTime      time.Time
+	width          int
+	height         int
 }
 
 func initialModel(conn *websocket.Conn) model {
 	ti := textinput.New()
 	ti.Placeholder = "Ask Airi something..."
 	ti.Focus()
-	ti.CharLimit = 156
+	ti.CharLimit = 1000
 	ti.Width = 20
 
 	defaultWidth := 80
@@ -118,13 +113,19 @@ func initialModel(conn *websocket.Conn) model {
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("cyan"))
 
 	return model{
-		conn:      conn,
-		textInput: ti,
-		viewport:  vp,
-		renderer:  renderer,
-		messages:  []string{logoDisplay, welcomeMsg},
-		spinner:   s,
-		isLoading: false,
+		conn:         conn,
+		textInput:    ti,
+		viewport:     vp,
+		renderer:     renderer,
+		messages:     []string{logoDisplay, welcomeMsg},
+		spinner:      s,
+		isLoading:    false,
+		sessionID:    "terminal_user",
+		connected:    true,
+		messageCount: 0,
+		startTime:    time.Now(),
+		width:        defaultWidth,
+		height:       24,
 	}
 }
 
@@ -141,6 +142,61 @@ func (m model) renderMarkdown(text string) string {
 		return text
 	}
 	return tr
+}
+
+func (m model) renderStatusBar() string {
+	var connStatus string
+	if m.connected {
+		connStatus = statusConnectedStyle.Render("● Connected")
+	} else {
+		connStatus = statusDisconnectedStyle.Render("● Disconnected")
+	}
+
+	msgCount := fmt.Sprintf("%s %s",
+		statusLabelStyle.Render("Messages:"),
+		statusValueStyle.Render(fmt.Sprintf("%d", m.messageCount)))
+
+	sessionInfo := fmt.Sprintf("%s %s",
+		statusLabelStyle.Render("Session:"),
+		statusValueStyle.Render(m.sessionID))
+
+	inputLen := len(m.textInput.Value())
+	inputMax := m.textInput.CharLimit
+	charCount := fmt.Sprintf("%s %s",
+		statusLabelStyle.Render("Input:"),
+		statusValueStyle.Render(fmt.Sprintf("%d/%d", inputLen, inputMax)))
+
+	uptime := time.Since(m.startTime).Round(time.Second)
+	uptimeStr := fmt.Sprintf("%s %s",
+		statusLabelStyle.Render("Uptime:"),
+		statusValueStyle.Render(uptime.String()))
+
+	leftSection := lipgloss.JoinHorizontal(lipgloss.Left,
+		connStatus,
+		"  ",
+		msgCount,
+		"  ",
+		sessionInfo,
+	)
+
+	rightSection := lipgloss.JoinHorizontal(lipgloss.Left,
+		charCount,
+		"  ",
+		uptimeStr,
+	)
+
+	gap := m.width - lipgloss.Width(leftSection) - lipgloss.Width(rightSection) - 4
+	if gap < 0 {
+		gap = 0
+	}
+
+	statusContent := lipgloss.JoinHorizontal(lipgloss.Left,
+		leftSection,
+		strings.Repeat(" ", gap),
+		rightSection,
+	)
+
+	return statusBarStyle.Width(m.width).Render(statusContent)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -162,6 +218,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			m.messages = append(m.messages, senderStyle.Render("You: ")+input)
+			m.messageCount++
 
 			m.currentAiChunk = ""
 			m.isLoading = true
@@ -175,12 +232,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			req := ChatRequest{
 				Message:         input,
-				SessionID:       "terminal_user",
+				SessionID:       m.sessionID,
 				SearchKnowledge: false,
 			}
+
 			sendCmd := func() tea.Msg {
 				err := m.conn.WriteJSON(req)
 				if err != nil {
+					m.connected = false
 					return err
 				}
 				return nil
@@ -191,8 +250,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+
 		m.viewport.Width = msg.Width
-		m.viewport.Height = msg.Height - 4
+		m.viewport.Height = msg.Height - 5
 		m.textInput.Width = msg.Width
 
 		coloredLogo := aiStyle.Render(airiLogo)
@@ -255,6 +317,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			header := aiStyle.Render("Airi:") + "\n"
 
 			m.messages = append(m.messages, header+renderedContent)
+			m.messageCount++
 			m.currentAiChunk = ""
 			m.isLoading = false
 
@@ -271,6 +334,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.SetContent(strings.Join(m.messages, "\n"))
 				m.viewport.GotoBottom()
 				m.isLoading = false
+				m.connected = false
 			}
 		}
 
@@ -278,6 +342,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case error:
 		m.err = msg
+		m.connected = false
 		return m, nil
 	}
 
@@ -293,8 +358,9 @@ func (m model) View() string {
 	}
 
 	return fmt.Sprintf(
-		"%s\n\n%s",
+		"%s\n%s\n%s",
 		m.viewport.View(),
+		m.renderStatusBar(),
 		m.textInput.View(),
 	) + "\n"
 }
