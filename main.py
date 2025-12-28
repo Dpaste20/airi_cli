@@ -90,6 +90,7 @@ def get_agent(session_id: str) -> Agent:
         session_id=session_id,
         model=Ollama(
             id="qwen3:airi",
+            options={"think": False, "temperature": 0.1},
         ),
         system_message=sys_msg,
         db=storage_db,
