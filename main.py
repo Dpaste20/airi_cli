@@ -3,13 +3,13 @@ import logging
 import os
 import subprocess
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Dict, Optional
 
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.knowledge.embedder.ollama import OllamaEmbedder
 from agno.knowledge.knowledge import Knowledge
-from agno.models.ollama import Ollama
+from agno.models.llama_cpp import LlamaCpp
 from agno.vectordb.qdrant import Qdrant
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,6 +48,62 @@ TOOLS = [
 ]
 
 storage_db: Optional[SqliteDb] = None
+
+session_preferences: Dict[str, Dict[str, any]] = {}
+
+
+def get_session_preference(session_id: str, key: str, default=None):
+    return session_preferences.get(session_id, {}).get(key, default)
+
+
+def set_session_preference(session_id: str, key: str, value):
+    if session_id not in session_preferences:
+        session_preferences[session_id] = {}
+    session_preferences[session_id][key] = value
+
+
+def parse_command(message: str, session_id: str) -> tuple[str, Optional[str]]:
+    message = message.strip()
+
+    if message.startswith("/set "):
+        parts = message[5:].strip().split()
+
+        if len(parts) == 0:
+            return "", "Usage: /set <preference> <value>\nAvailable: no_think, think"
+
+        command = parts[0].lower()
+
+        if command == "no_think":
+            set_session_preference(session_id, "thinking_mode", False)
+            return "", " Thinking mode disabled "
+
+        elif command == "think":
+            set_session_preference(session_id, "thinking_mode", True)
+            return "", " Thinking mode enabled. "
+
+        else:
+            return "", f"Unknown preference: {command}\nAvailable: no_think, think"
+
+    if message.startswith("/help"):
+        help_text = """Available commands:
+• /set no_think - Disable thinking mode (faster responses)
+• /set think - Enable thinking mode (more reasoning)
+• /help - Show this help message
+
+Current settings:
+• Thinking mode: {}""".format(
+            "enabled"
+            if get_session_preference(session_id, "thinking_mode", True)
+            else "disabled"
+        )
+        return "", help_text
+
+    thinking_enabled = get_session_preference(session_id, "thinking_mode", True)
+
+    if not thinking_enabled and not message.endswith("/no_think"):
+        message = message + " /no_think"
+
+    return message, None
 
 
 @asynccontextmanager
@@ -88,9 +144,8 @@ def get_agent(session_id: str) -> Agent:
 
     return Agent(
         session_id=session_id,
-        model=Ollama(
+        model=LlamaCpp(
             id="qwen3:airi",
-            options={"think": False, "temperature": 0.1},
         ),
         system_message=sys_msg,
         db=storage_db,
@@ -99,6 +154,7 @@ def get_agent(session_id: str) -> Agent:
         search_knowledge=True,
         add_history_to_context=True,
         num_history_runs=10,
+        reasoning=False,
         markdown=True,
     )
 
@@ -113,7 +169,6 @@ class ChatResponse(BaseModel):
 
 
 def speak_response(text: str):
-    """Executes spd-say to read the text aloud."""
     try:
         subprocess.Popen(["spd-say", text])
     except Exception as e:
@@ -128,8 +183,15 @@ async def root():
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     try:
+        processed_message, command_response = parse_command(
+            request.message, request.session_id
+        )
+
+        if command_response:
+            return ChatResponse(response=command_response)
+
         local_agent = get_agent(session_id=request.session_id)
-        response = await local_agent.arun(request.message)
+        response = await local_agent.arun(processed_message)
 
         speak_response(response.content)
 
@@ -157,10 +219,20 @@ async def websocket_chat(websocket: WebSocket):
                 continue
 
             try:
+                processed_message, command_response = parse_command(message, session_id)
+
+                if command_response:
+                    await websocket.send_json({"type": "start"})
+                    await websocket.send_json(
+                        {"type": "chunk", "content": command_response}
+                    )
+                    await websocket.send_json({"type": "end"})
+                    continue
+
                 local_agent = get_agent(session_id=session_id)
                 await websocket.send_json({"type": "start"})
 
-                response_iterator = local_agent.arun(message, stream=True)
+                response_iterator = local_agent.arun(processed_message, stream=True)
 
                 full_response_text = ""
 
