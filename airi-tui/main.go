@@ -71,29 +71,35 @@ type ChatRequest struct {
 }
 
 type WSMessage struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
-	Message string `json:"message"`
-	Error   string `json:"error"`
+	Type           string  `json:"type"`
+	Content        string  `json:"content"`
+	Message        string  `json:"message"`
+	Error          string  `json:"error"`
+	TokenCount     int     `json:"token_count"`
+	GenerationTime float64 `json:"generation_time"`
 }
 
 type model struct {
-	conn           *websocket.Conn
-	viewport       viewport.Model
-	textInput      textinput.Model
-	renderer       *glamour.TermRenderer
-	messages       []string
-	currentAiChunk string
-	err            error
-	spinner        spinner.Model
-	isLoading      bool
-	sessionID      string
-	connected      bool
-	messageCount   int
-	startTime      time.Time
-	width          int
-	height         int
-	thinkingMode   bool
+	conn            *websocket.Conn
+	viewport        viewport.Model
+	textInput       textinput.Model
+	renderer        *glamour.TermRenderer
+	messages        []string
+	currentAiChunk  string
+	err             error
+	spinner         spinner.Model
+	isLoading       bool
+	sessionID       string
+	connected       bool
+	messageCount    int
+	startTime       time.Time
+	width           int
+	height          int
+	thinkingMode    bool
+	generatedTokens int
+	generationStart time.Time
+	generationTime  time.Duration
+	tokensPerSecond float64
 }
 
 func initialModel(conn *websocket.Conn) model {
@@ -123,20 +129,23 @@ func initialModel(conn *websocket.Conn) model {
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("cyan"))
 
 	return model{
-		conn:         conn,
-		textInput:    ti,
-		viewport:     vp,
-		renderer:     renderer,
-		messages:     []string{logoDisplay, welcomeMsg},
-		spinner:      s,
-		isLoading:    false,
-		sessionID:    "terminal_user",
-		connected:    true,
-		messageCount: 0,
-		startTime:    time.Now(),
-		width:        defaultWidth,
-		height:       24,
-		thinkingMode: true,
+		conn:            conn,
+		textInput:       ti,
+		viewport:        vp,
+		renderer:        renderer,
+		messages:        []string{logoDisplay, welcomeMsg},
+		spinner:         s,
+		isLoading:       false,
+		sessionID:       "terminal_user",
+		connected:       true,
+		messageCount:    0,
+		startTime:       time.Now(),
+		width:           defaultWidth,
+		height:          24,
+		thinkingMode:    true,
+		generatedTokens: 0,
+		generationTime:  0,
+		tokensPerSecond: 0.0,
 	}
 }
 
@@ -175,12 +184,24 @@ func (m model) renderStatusBar() string {
 	if m.thinkingMode {
 		thinkMode = fmt.Sprintf("%s %s",
 			statusLabelStyle.Render("Mode:"),
-			thinkingEnabledStyle.Render("Think 🧠"))
+			thinkingEnabledStyle.Render("🧠 Think"))
 	} else {
 		thinkMode = fmt.Sprintf("%s %s",
 			statusLabelStyle.Render("Mode:"),
-			thinkingDisabledStyle.Render("Fast ⚡"))
+			thinkingDisabledStyle.Render("⚡ Fast"))
 	}
+
+	genTokens := fmt.Sprintf("%s %s",
+		statusLabelStyle.Render("Tokens:"),
+		statusValueStyle.Render(fmt.Sprintf("%d", m.generatedTokens)))
+
+	genTime := fmt.Sprintf("%s %s",
+		statusLabelStyle.Render("Time:"),
+		statusValueStyle.Render(fmt.Sprintf("%.2fs", m.generationTime.Seconds())))
+
+	genSpeed := fmt.Sprintf("%s %s",
+		statusLabelStyle.Render("Speed:"),
+		statusValueStyle.Render(fmt.Sprintf("%.2f t/s", m.tokensPerSecond)))
 
 	statusContent := lipgloss.JoinHorizontal(lipgloss.Left,
 		connStatus,
@@ -190,6 +211,12 @@ func (m model) renderStatusBar() string {
 		thinkMode,
 		"  ",
 		sessionInfo,
+		"  ",
+		genTokens,
+		"  ",
+		genTime,
+		"  ",
+		genSpeed,
 	)
 
 	return statusBarStyle.Width(m.width).Render(statusContent)
@@ -233,6 +260,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.currentAiChunk = ""
 			m.isLoading = true
+
+			m.generatedTokens = 0
+			m.generationTime = 0
+			m.tokensPerSecond = 0.0
 
 			content := strings.Join(m.messages, "\n")
 			header := aiStyle.Render("Airi:")
@@ -311,9 +342,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case "start":
 			m.isLoading = true
+			m.generationStart = time.Now()
+			m.generatedTokens = 0
 
 		case "chunk":
 			m.currentAiChunk += msg.Content
+
+			m.generatedTokens = len(m.currentAiChunk) / 4
+			elapsed := time.Since(m.generationStart).Seconds()
+			if elapsed > 0 {
+				m.tokensPerSecond = float64(m.generatedTokens) / elapsed
+			}
 
 			m.detectThinkingModeChange(msg.Content)
 
@@ -327,6 +366,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 
 		case "end":
+			if msg.GenerationTime > 0 {
+				m.generationTime = time.Duration(msg.GenerationTime * float64(time.Second))
+			} else {
+				m.generationTime = time.Since(m.generationStart)
+			}
+
+			if msg.TokenCount > 0 {
+				m.generatedTokens = msg.TokenCount
+			} else {
+				m.generatedTokens = len(m.currentAiChunk) / 4
+			}
+
+			if m.generationTime.Seconds() > 0 {
+				m.tokensPerSecond = float64(m.generatedTokens) / m.generationTime.Seconds()
+			}
+
 			m.detectThinkingModeChange(m.currentAiChunk)
 
 			renderedContent := m.renderMarkdown(m.currentAiChunk)
