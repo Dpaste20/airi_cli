@@ -29,10 +29,11 @@ const airiLogo = `
 `
 
 var (
-	senderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
-	aiStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
-	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	infoStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
+	senderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
+	aiStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
+	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
+	commandStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 
 	statusBarStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("230")).
@@ -52,6 +53,14 @@ var (
 
 	statusValueStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("255")).
+				Bold(true)
+
+	thinkingEnabledStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("214")).
+				Bold(true)
+
+	thinkingDisabledStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("39")).
 				Bold(true)
 )
 
@@ -84,11 +93,12 @@ type model struct {
 	startTime      time.Time
 	width          int
 	height         int
+	thinkingMode   bool
 }
 
 func initialModel(conn *websocket.Conn) model {
 	ti := textinput.New()
-	ti.Placeholder = "Ask Airi something..."
+	ti.Placeholder = "Ask Airi something... (type /help for commands)"
 	ti.Focus()
 	ti.CharLimit = 1000
 	ti.Width = 20
@@ -126,6 +136,7 @@ func initialModel(conn *websocket.Conn) model {
 		startTime:    time.Now(),
 		width:        defaultWidth,
 		height:       24,
+		thinkingMode: true,
 	}
 }
 
@@ -160,43 +171,36 @@ func (m model) renderStatusBar() string {
 		statusLabelStyle.Render("Session:"),
 		statusValueStyle.Render(m.sessionID))
 
-	inputLen := len(m.textInput.Value())
-	inputMax := m.textInput.CharLimit
-	charCount := fmt.Sprintf("%s %s",
-		statusLabelStyle.Render("Input:"),
-		statusValueStyle.Render(fmt.Sprintf("%d/%d", inputLen, inputMax)))
+	var thinkMode string
+	if m.thinkingMode {
+		thinkMode = fmt.Sprintf("%s %s",
+			statusLabelStyle.Render("Mode:"),
+			thinkingEnabledStyle.Render("Think 🧠"))
+	} else {
+		thinkMode = fmt.Sprintf("%s %s",
+			statusLabelStyle.Render("Mode:"),
+			thinkingDisabledStyle.Render("Fast ⚡"))
+	}
 
-	uptime := time.Since(m.startTime).Round(time.Second)
-	uptimeStr := fmt.Sprintf("%s %s",
-		statusLabelStyle.Render("Uptime:"),
-		statusValueStyle.Render(uptime.String()))
-
-	leftSection := lipgloss.JoinHorizontal(lipgloss.Left,
+	statusContent := lipgloss.JoinHorizontal(lipgloss.Left,
 		connStatus,
 		"  ",
 		msgCount,
 		"  ",
+		thinkMode,
+		"  ",
 		sessionInfo,
 	)
 
-	rightSection := lipgloss.JoinHorizontal(lipgloss.Left,
-		charCount,
-		"  ",
-		uptimeStr,
-	)
-
-	gap := m.width - lipgloss.Width(leftSection) - lipgloss.Width(rightSection) - 4
-	if gap < 0 {
-		gap = 0
-	}
-
-	statusContent := lipgloss.JoinHorizontal(lipgloss.Left,
-		leftSection,
-		strings.Repeat(" ", gap),
-		rightSection,
-	)
-
 	return statusBarStyle.Width(m.width).Render(statusContent)
+}
+
+func (m *model) detectThinkingModeChange(content string) {
+	if strings.Contains(content, "Thinking mode disabled") || strings.Contains(content, "Responses will be faster") {
+		m.thinkingMode = false
+	} else if strings.Contains(content, "Thinking mode enabled") || strings.Contains(content, "Model will reason") {
+		m.thinkingMode = true
+	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -217,7 +221,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			m.messages = append(m.messages, senderStyle.Render("You: ")+input)
+			var displayInput string
+			if strings.HasPrefix(input, "/") {
+				displayInput = commandStyle.Render("You: ") + input
+			} else {
+				displayInput = senderStyle.Render("You: ") + input
+			}
+
+			m.messages = append(m.messages, displayInput)
 			m.messageCount++
 
 			m.currentAiChunk = ""
@@ -303,6 +314,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "chunk":
 			m.currentAiChunk += msg.Content
+
+			m.detectThinkingModeChange(msg.Content)
+
 			renderedContent := m.renderMarkdown(m.currentAiChunk)
 			header := aiStyle.Render("Airi:") + "\n"
 
@@ -313,6 +327,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 
 		case "end":
+			m.detectThinkingModeChange(m.currentAiChunk)
+
 			renderedContent := m.renderMarkdown(m.currentAiChunk)
 			header := aiStyle.Render("Airi:") + "\n"
 
