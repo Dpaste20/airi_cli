@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import subprocess
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -153,9 +154,12 @@ async def websocket_chat(websocket: WebSocket):
                 local_agent = get_agent(session_id=session_id)
                 await websocket.send_json({"type": "start"})
 
+                start_time = time.perf_counter()
+
                 response_iterator = local_agent.arun(message, stream=True)
 
                 full_response_text = ""
+                token_count = 0
 
                 async for chunk in response_iterator:
                     content = ""
@@ -166,12 +170,21 @@ async def websocket_chat(websocket: WebSocket):
 
                     if content:
                         full_response_text += content
+                        token_count += len(content) / 4.0
                         await websocket.send_json({"type": "chunk", "content": content})
+
+                generation_time = time.perf_counter() - start_time
 
                 if full_response_text:
                     speak_response(full_response_text)
 
-                await websocket.send_json({"type": "end"})
+                await websocket.send_json(
+                    {
+                        "type": "end",
+                        "token_count": int(token_count),
+                        "generation_time": generation_time,
+                    }
+                )
 
             except Exception as e:
                 print(f"Processing error: {e}")
