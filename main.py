@@ -143,7 +143,7 @@ def get_agent(session_id: str) -> Agent:
         session_id=session_id,
         model=LlamaCpp(
             id="qwen3:airi",
-            temperature=0.0,
+            temperature=0.5,
             top_p=0.7,
         ),
         system_message=sys_msg,
