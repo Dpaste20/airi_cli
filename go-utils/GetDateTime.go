@@ -15,11 +15,13 @@ type DateTimeInfo struct {
 
 func main() {
 	now := time.Now()
+
 	info := DateTimeInfo{
-		CurrentTime: now.Format(time.RFC3339),
-		CurrentDate: now.Format(time.DateOnly), // YYYY-MM-DD
+		CurrentTime: now.Format("15:04:05"),
+
+		CurrentDate: now.Format("02/01/2006"),
 		DayOfWeek:   now.Weekday().String(),
-		Timezone:    now.Format("MST"),
+		Timezone:    now.Location().String(),
 	}
 
 	jsonData, err := json.Marshal(info)
