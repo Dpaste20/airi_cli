@@ -17,15 +17,18 @@ from pydantic import BaseModel
 from utils.FileModify import file_modify
 from utils.FileSearch import file_search
 from utils.FileWrite import file_write
+from utils.GetActiveConnections import get_active_connections
 from utils.GetBatteryStatus import get_battery_status
 from utils.GetDateTime import get_current_datetime
 from utils.GetDiskSpace import get_disk_space
+from utils.GetIPInfo import get_ip_info
 from utils.GetRunningProcesses import get_running_processes
 from utils.GetSystemLogs import get_system_logs
 from utils.GetUptime import get_uptime
 from utils.KillProcess import kill_processes
 from utils.OpenApplication import open_application
 from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
+from utils.SystemInfo import get_system_info
 
 logging.getLogger("agno").setLevel(logging.ERROR)
 
@@ -44,6 +47,9 @@ TOOLS = [
     file_modify,
     open_application,
     get_current_datetime,
+    get_ip_info,
+    get_active_connections,
+    get_system_info,
 ]
 
 storage_db: Optional[SqliteDb] = None
@@ -112,6 +118,9 @@ async def lifespan(app: FastAPI):
     await initialize_rag()
     print("System initialized successfully")
     yield
+
+    stop_audio()
+
     print("\nCleaning up session...")
     if os.path.exists(DB_PATH):
         try:
@@ -143,7 +152,7 @@ def get_agent(session_id: str) -> Agent:
         session_id=session_id,
         model=LlamaCpp(
             id="qwen3:airi",
-            temperature=0.5,
+            temperature=0.8,
             top_p=0.7,
         ),
         system_message=sys_msg,
@@ -168,10 +177,18 @@ class ChatResponse(BaseModel):
 
 
 def speak_response(text: str):
+    stop_audio()
     try:
         subprocess.Popen(["spd-say", text])
     except Exception as e:
         print(f"Error executing spd-say: {e}")
+
+
+def stop_audio():
+    try:
+        subprocess.run(["spd-say", "-C"], check=False)
+    except Exception as e:
+        print(f"Error stopping audio: {e}")
 
 
 @app.get("/")
@@ -274,8 +291,10 @@ async def websocket_chat(websocket: WebSocket):
 
     except WebSocketDisconnect:
         print("Client disconnected")
+        stop_audio()
     except Exception as e:
         print(f"WebSocket error: {e}")
+        stop_audio()
 
 
 if __name__ == "__main__":
