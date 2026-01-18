@@ -28,9 +28,13 @@ from utils.GetUptime import get_uptime
 from utils.KillProcess import kill_processes
 from utils.OpenApplication import open_application
 from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
+from utils.RestartSystem import restart_system
+from utils.Shutdown import shutdown_system
+from utils.SleepMode import sleep_mode_system
 from utils.SystemInfo import get_system_info
 
 logging.getLogger("agno").setLevel(logging.ERROR)
+
 
 DB_PATH = "tmp/alpha.db"
 
@@ -50,6 +54,9 @@ TOOLS = [
     get_ip_info,
     get_active_connections,
     get_system_info,
+    shutdown_system,
+    restart_system,
+    sleep_mode_system,
 ]
 
 storage_db: Optional[SqliteDb] = None
