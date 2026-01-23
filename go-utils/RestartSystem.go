@@ -3,9 +3,12 @@ package main
 import (
 	"fmt"
 	"os/exec"
+	"time"
 )
 
 func main() {
+
+	time.Sleep(5 * time.Second)
 
 	cmd := exec.Command("shutdown", "-r", "now")
 
