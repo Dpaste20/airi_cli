@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -29,11 +32,12 @@ const airiLogo = `
 `
 
 var (
-	senderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
-	aiStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
-	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
-	commandStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	senderStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
+	aiStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
+	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	infoStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
+	commandStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	recordingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Blink(true)
 
 	statusBarStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("230")).
@@ -65,9 +69,11 @@ var (
 )
 
 type ChatRequest struct {
-	Message         string `json:"message"`
+	Message         string `json:"message,omitempty"`
 	SessionID       string `json:"session_id"`
 	SearchKnowledge bool   `json:"search_knowledge"`
+	AudioData       string `json:"audio_data,omitempty"`
+	Action          string `json:"action,omitempty"`
 }
 
 type WSMessage struct {
@@ -80,26 +86,31 @@ type WSMessage struct {
 }
 
 type model struct {
-	conn            *websocket.Conn
-	viewport        viewport.Model
-	textInput       textinput.Model
-	renderer        *glamour.TermRenderer
-	messages        []string
-	currentAiChunk  string
-	err             error
-	spinner         spinner.Model
-	isLoading       bool
-	sessionID       string
-	connected       bool
-	messageCount    int
-	startTime       time.Time
-	width           int
-	height          int
-	thinkingMode    bool
-	generatedTokens int
-	generationStart time.Time
-	generationTime  time.Duration
-	tokensPerSecond float64
+	conn               *websocket.Conn
+	viewport           viewport.Model
+	textInput          textinput.Model
+	renderer           *glamour.TermRenderer
+	messages           []string
+	currentAiChunk     string
+	err                error
+	spinner            spinner.Model
+	isLoading          bool
+	sessionID          string
+	connected          bool
+	messageCount       int
+	startTime          time.Time
+	width              int
+	height             int
+	thinkingMode       bool
+	generatedTokens    int
+	generationStart    time.Time
+	generationTime     time.Duration
+	tokensPerSecond    float64
+	isRecording        bool
+	recordCmd          *exec.Cmd
+	awaitingVoiceChunk bool
+	pendingVoiceInput  string
+	isSpeaking         bool
 }
 
 func initialModel(conn *websocket.Conn) model {
@@ -129,23 +140,27 @@ func initialModel(conn *websocket.Conn) model {
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("cyan"))
 
 	return model{
-		conn:            conn,
-		textInput:       ti,
-		viewport:        vp,
-		renderer:        renderer,
-		messages:        []string{logoDisplay, welcomeMsg},
-		spinner:         s,
-		isLoading:       false,
-		sessionID:       "terminal_user",
-		connected:       true,
-		messageCount:    0,
-		startTime:       time.Now(),
-		width:           defaultWidth,
-		height:          24,
-		thinkingMode:    true,
-		generatedTokens: 0,
-		generationTime:  0,
-		tokensPerSecond: 0.0,
+		conn:               conn,
+		textInput:          ti,
+		viewport:           vp,
+		renderer:           renderer,
+		messages:           []string{logoDisplay, welcomeMsg},
+		spinner:            s,
+		isLoading:          false,
+		sessionID:          "terminal_user",
+		connected:          true,
+		messageCount:       0,
+		startTime:          time.Now(),
+		width:              defaultWidth,
+		height:             24,
+		thinkingMode:       true,
+		generatedTokens:    0,
+		generationTime:     0,
+		tokensPerSecond:    0.0,
+		isRecording:        false,
+		awaitingVoiceChunk: false,
+		pendingVoiceInput:  "",
+		isSpeaking:         false,
 	}
 }
 
@@ -170,6 +185,15 @@ func (m model) renderStatusBar() string {
 		connStatus = statusConnectedStyle.Render("● Connected")
 	} else {
 		connStatus = statusDisconnectedStyle.Render("● Disconnected")
+	}
+
+	var recStatus string
+	if m.isRecording {
+		recStatus = recordingStyle.Render("● Listening")
+	} else if m.isSpeaking {
+		recStatus = statusLabelStyle.Render("Speaking")
+	} else {
+		recStatus = statusLabelStyle.Render("Space to Talk")
 	}
 
 	msgCount := fmt.Sprintf("%s %s",
@@ -206,6 +230,8 @@ func (m model) renderStatusBar() string {
 	statusContent := lipgloss.JoinHorizontal(lipgloss.Left,
 		connStatus,
 		"  ",
+		recStatus,
+		"  ",
 		msgCount,
 		"  ",
 		thinkMode,
@@ -241,11 +267,92 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
+			if m.isRecording && m.recordCmd != nil {
+				_ = m.recordCmd.Process.Kill()
+			}
 			return m, tea.Quit
+
+		case tea.KeySpace:
+
+			if m.textInput.Value() == "" {
+
+				if m.isRecording {
+					m.isRecording = false
+					if m.recordCmd != nil && m.recordCmd.Process != nil {
+						_ = m.recordCmd.Process.Signal(os.Interrupt)
+						time.Sleep(100 * time.Millisecond)
+					}
+
+					audioBytes, err := os.ReadFile("/tmp/airi_voice.wav")
+					if err != nil {
+						m.messages = append(m.messages, errStyle.Render("Error reading audio: "+err.Error()))
+						return m, nil
+					}
+
+					encodedAudio := base64.StdEncoding.EncodeToString(audioBytes)
+
+					m.awaitingVoiceChunk = true
+					m.isLoading = true
+					m.generatedTokens = 0
+					m.generationTime = 0
+					m.tokensPerSecond = 0.0
+
+					req := ChatRequest{
+						SessionID: m.sessionID,
+						AudioData: encodedAudio,
+					}
+
+					sendCmd := func() tea.Msg {
+						err := m.conn.WriteJSON(req)
+						if err != nil {
+							m.connected = false
+							return err
+						}
+						return nil
+					}
+					return m, tea.Batch(sendCmd, m.spinner.Tick)
+				}
+
+				if m.isSpeaking {
+					stopSpeechCmd := func() tea.Msg {
+						req := ChatRequest{
+							SessionID: m.sessionID,
+							Action:    "stop_speech",
+						}
+						_ = m.conn.WriteJSON(req)
+						return nil
+					}
+					stopSpeechCmd()
+					m.isSpeaking = false
+				}
+
+				m.isRecording = true
+				m.recordCmd = exec.Command("arecord", "-f", "cd", "/tmp/airi_voice.wav")
+				if err := m.recordCmd.Start(); err != nil {
+					m.messages = append(m.messages, errStyle.Render("Error starting recording: "+err.Error()))
+					m.isRecording = false
+					return m, nil
+				}
+				return m, m.spinner.Tick
+			}
+
 		case tea.KeyEnter:
 			input := m.textInput.Value()
 			if input == "" {
 				return m, nil
+			}
+
+			if m.isSpeaking {
+				stopSpeechCmd := func() tea.Msg {
+					req := ChatRequest{
+						SessionID: m.sessionID,
+						Action:    "stop_speech",
+					}
+					_ = m.conn.WriteJSON(req)
+					return nil
+				}
+				stopSpeechCmd()
+				m.isSpeaking = false
 			}
 
 			var displayInput string
@@ -336,6 +443,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			return m, cmd
+		} else if m.isRecording {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
 		}
 
 	case WSMessage:
@@ -346,24 +457,44 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.generatedTokens = 0
 
 		case "chunk":
-			m.currentAiChunk += msg.Content
 
-			m.generatedTokens = len(m.currentAiChunk) / 4
-			elapsed := time.Since(m.generationStart).Seconds()
-			if elapsed > 0 {
-				m.tokensPerSecond = float64(m.generatedTokens) / elapsed
+			if m.awaitingVoiceChunk && strings.Contains(msg.Content, "🎤 *Voice:*") {
+
+				voiceText := strings.TrimPrefix(msg.Content, "🎤 *Voice:* ")
+				voiceText = strings.TrimSpace(voiceText)
+
+				displayInput := senderStyle.Render("You: ") + voiceText
+				m.messages = append(m.messages, displayInput)
+				m.messageCount++
+				m.pendingVoiceInput = voiceText
+				m.awaitingVoiceChunk = false
+
+				content := strings.Join(m.messages, "\n")
+				header := aiStyle.Render("Airi:")
+				content += "\n" + header + " " + m.spinner.View()
+				m.viewport.SetContent(content)
+				m.viewport.GotoBottom()
+			} else {
+
+				m.currentAiChunk += msg.Content
+
+				m.generatedTokens = len(m.currentAiChunk) / 4
+				elapsed := time.Since(m.generationStart).Seconds()
+				if elapsed > 0 {
+					m.tokensPerSecond = float64(m.generatedTokens) / elapsed
+				}
+
+				m.detectThinkingModeChange(msg.Content)
+
+				renderedContent := m.renderMarkdown(m.currentAiChunk)
+				header := aiStyle.Render("Airi:") + "\n"
+
+				displayMessages := append([]string{}, m.messages...)
+				displayMessages = append(displayMessages, header+renderedContent)
+
+				m.viewport.SetContent(strings.Join(displayMessages, "\n"))
+				m.viewport.GotoBottom()
 			}
-
-			m.detectThinkingModeChange(msg.Content)
-
-			renderedContent := m.renderMarkdown(m.currentAiChunk)
-			header := aiStyle.Render("Airi:") + "\n"
-
-			displayMessages := append([]string{}, m.messages...)
-			displayMessages = append(displayMessages, header+renderedContent)
-
-			m.viewport.SetContent(strings.Join(displayMessages, "\n"))
-			m.viewport.GotoBottom()
 
 		case "end":
 			if msg.GenerationTime > 0 {
@@ -391,6 +522,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messageCount++
 			m.currentAiChunk = ""
 			m.isLoading = false
+			m.pendingVoiceInput = ""
+			m.isSpeaking = true
+
+		case "speech_stopped":
+			m.isSpeaking = false
 
 		case "error":
 			errMsg := errStyle.Render("Error: " + msg.Message)
@@ -398,6 +534,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(strings.Join(m.messages, "\n"))
 			m.viewport.GotoBottom()
 			m.isLoading = false
+			m.isSpeaking = false
 
 		default:
 			if msg.Error != "" {
@@ -406,6 +543,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.GotoBottom()
 				m.isLoading = false
 				m.connected = false
+				m.isSpeaking = false
 			}
 		}
 
@@ -414,6 +552,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case error:
 		m.err = msg
 		m.connected = false
+		m.isSpeaking = false
 		return m, nil
 	}
 

@@ -1,11 +1,14 @@
 import asyncio
+import base64
 import logging
 import os
 import subprocess
+import tempfile
 import time
 from contextlib import asynccontextmanager
 from typing import Dict, Optional
 
+import speech_recognition as sr
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.knowledge.knowledge import Knowledge
@@ -14,6 +17,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from utils.FetchUrls import fetch_urls
 from utils.FileModify import file_modify
 from utils.FileSearch import file_search
 from utils.FileWrite import file_write
@@ -27,6 +31,7 @@ from utils.GetSystemLogs import get_system_logs
 from utils.GetUptime import get_uptime
 from utils.KillProcess import kill_processes
 from utils.OpenApplication import open_application
+from utils.OpenUrl import open_url
 from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
 from utils.RestartSystem import restart_system
 from utils.Shutdown import shutdown_system
@@ -57,6 +62,8 @@ TOOLS = [
     shutdown_system,
     restart_system,
     sleep_mode_system,
+    fetch_urls,
+    open_url,
 ]
 
 storage_db: Optional[SqliteDb] = None
@@ -86,20 +93,20 @@ def parse_command(message: str, session_id: str) -> tuple[str, Optional[str]]:
 
         if command == "no_think":
             set_session_preference(session_id, "thinking_mode", False)
-            return "", " Thinking mode disabled "
+            return "", "⚡ Thinking mode disabled. Responses will be faster."
 
         elif command == "think":
             set_session_preference(session_id, "thinking_mode", True)
-            return "", " Thinking mode enabled. "
+            return "", "🧠 Thinking mode enabled. Model will reason through problems."
 
         else:
             return "", f"Unknown preference: {command}\nAvailable: no_think, think"
 
     if message.startswith("/help"):
         help_text = """Available commands:
-• /set no_think
-• /set think
-• /help
+• /set no_think - Disable thinking mode for faster responses
+• /set think - Enable thinking mode for better reasoning
+• /help - Show this help message
 
 Current settings:
 • Thinking mode: {}""".format(
@@ -115,6 +122,34 @@ Current settings:
         message = message + " /no_think"
 
     return message, None
+
+
+def transcribe_audio(base64_audio: str) -> str:
+    r = sr.Recognizer()
+    temp_filename = ""
+    try:
+        audio_bytes = base64.b64decode(base64_audio)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+            f.write(audio_bytes)
+            temp_filename = f.name
+
+        with sr.AudioFile(temp_filename) as source:
+            audio_data = r.record(source)
+            text = r.recognize_google(audio_data)
+            return text
+    except sr.UnknownValueError:
+        return "Could not understand audio"
+    except sr.RequestError as e:
+        return f"Could not request results; {e}"
+    except Exception as e:
+        return f"Audio error: {e}"
+    finally:
+        if temp_filename and os.path.exists(temp_filename):
+            try:
+                os.remove(temp_filename)
+            except Exception:
+                pass
 
 
 @asynccontextmanager
@@ -235,10 +270,28 @@ async def websocket_chat(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_json()
-            message = data.get("message", "")
+
+            if data.get("action") == "stop_speech":
+                stop_audio()
+                await websocket.send_json({"type": "speech_stopped"})
+                continue
+
+            message = ""
+            if "audio_data" in data and data["audio_data"]:
+                print("Receiving audio data...")
+                transcribed_text = transcribe_audio(data["audio_data"])
+                print(f"Transcribed: {transcribed_text}")
+
+                await websocket.send_json(
+                    {"type": "chunk", "content": f"🎤 *Voice:* {transcribed_text}\n\n"}
+                )
+                message = transcribed_text
+            else:
+                message = data.get("message", "")
+
             session_id = data.get("session_id", f"ws_{id(websocket)}")
 
-            if not message:
+            if not message or message == "Could not understand audio":
                 continue
 
             try:
