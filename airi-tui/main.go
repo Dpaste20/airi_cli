@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/url"
@@ -591,12 +592,20 @@ func waitForIncomingMessage(conn *websocket.Conn) tea.Cmd {
 }
 
 func main() {
-	u := url.URL{Scheme: "ws", Host: "localhost:8000", Path: "/ws/chat"}
+	port := flag.String("port", "8000", "WebSocket server port")
+	flag.Parse()
+
+	u := url.URL{
+		Scheme: "ws",
+		Host:   "localhost:" + *port,
+		Path:   "/ws/chat",
+	}
+
 	fmt.Println("Connecting to", u.String(), "...")
 
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		log.Fatal("Could not connect. Is the backend running?\nError: ", err)
+		log.Fatal("Could not connect. Is the backend running?\nError:", err)
 	}
 	defer conn.Close()
 

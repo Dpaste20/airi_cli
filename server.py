@@ -11,7 +11,7 @@ from typing import Optional
 import speech_recognition as sr
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
-from agno.models.google import Gemini
+from agno.models.ollama import Ollama
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,6 +42,7 @@ logging.getLogger("agno").setLevel(logging.ERROR)
 load_dotenv()
 
 DB_PATH = "tmp/alpha.db"
+
 
 TOOLS = [
     get_battery_status,
@@ -100,6 +101,29 @@ app.add_middleware(
 )
 
 
+def save_chat_log(session_id: str, user_message: str, agent_response: str):
+    """
+    Appends the conversation turn to a daily log file in the logs/ directory.
+    Format: logs/conversation_YYYY-MM-DD.log
+    """
+    log_dir = "logs"
+
+    os.makedirs(log_dir, exist_ok=True)
+
+    today_date = time.strftime("%Y-%m-%d")
+    filename = os.path.join(log_dir, f"conversation_{today_date}.log")
+
+    try:
+        with open(filename, "a", encoding="utf-8") as f:
+            current_time = time.strftime("%H:%M:%S")
+            f.write(f"--- [{current_time}] Session: {session_id} ---\n")
+            f.write(f"User: {user_message}\n")
+            f.write(f"Airi: {agent_response}\n")
+            f.write("\n")
+    except Exception as e:
+        print(f"Error saving chat log: {e}")
+
+
 def get_agent(session_id: str) -> Agent:
     if not storage_db:
         raise ValueError("Database not initialized")
@@ -109,7 +133,7 @@ def get_agent(session_id: str) -> Agent:
 
     return Agent(
         session_id=session_id,
-        model=Gemini(id="gemini-flash-latest"),
+        model=Ollama(id="gpt-oss:120b-cloud"),
         system_message=sys_msg,
         db=storage_db,
         knowledge=kb,
@@ -183,6 +207,9 @@ async def chat(request: ChatRequest):
     try:
         local_agent = get_agent(session_id=request.session_id)
         response = await local_agent.arun(request.message)
+
+        save_chat_log(request.session_id, request.message, response.content)
+
         return ChatResponse(response=response.content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -201,7 +228,6 @@ async def websocket_chat(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
 
-            # Handle stop speech command
             if data.get("action") == "stop_speech":
                 stop_audio()
                 await websocket.send_json({"type": "speech_stopped"})
@@ -252,6 +278,10 @@ async def websocket_chat(websocket: WebSocket):
 
                 if full_response_text:
                     speak_response(full_response_text)
+
+                    # --- SAVE LOG HERE ---
+                    save_chat_log(session_id, message, full_response_text)
+                    # ---------------------
 
                 await websocket.send_json(
                     {

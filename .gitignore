@@ -12,6 +12,7 @@ qdrant_data/
 Airi_created_files/
 qdrant_data/
 
+logs/
 
 test.py
 
