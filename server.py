@@ -99,11 +99,10 @@ async def lifespan(app: FastAPI):
 
     if os.path.exists(DB_PATH):
         try:
-            # Check if it is a directory before deleting
             if os.path.isdir(DB_PATH):
-                shutil.rmtree(DB_PATH)  # Use shutil to remove directory trees
+                shutil.rmtree(DB_PATH)
             else:
-                os.remove(DB_PATH)  # Use os.remove only if it's a file
+                os.remove(DB_PATH)
 
             print(f"Session database '{DB_PATH}' deleted.")
         except PermissionError:
@@ -124,10 +123,7 @@ app.add_middleware(
 
 
 def save_chat_log(session_id: str, user_message: str, agent_response: str):
-    """
-    Appends the conversation turn to a daily log file in the logs/ directory.
-    Format: logs/conversation_YYYY-MM-DD.log
-    """
+
     log_dir = "logs"
 
     os.makedirs(log_dir, exist_ok=True)
