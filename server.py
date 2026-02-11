@@ -10,7 +10,7 @@ from typing import Optional
 
 import speech_recognition as sr
 from agno.agent import Agent
-from agno.db.sqlite import SqliteDb
+from agno.db.json import JsonDb
 from agno.models.ollama import Ollama
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -49,7 +49,7 @@ from utils.SystemInfo import get_system_info
 logging.getLogger("agno").setLevel(logging.ERROR)
 load_dotenv()
 
-DB_PATH = "tmp/alpha.db"
+DB_PATH = "tmp/alpha_db"
 
 
 TOOLS = [
@@ -81,14 +81,14 @@ TOOLS = [
     send_email,
 ]
 
-storage_db: Optional[SqliteDb] = None
+storage_db: Optional[JsonDb] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global storage_db
     print("Initializing Airi Backend...")
-    storage_db = SqliteDb(db_file=DB_PATH)
+    storage_db = JsonDb(db_path=DB_PATH)
     await initialize_rag()
     print("System initialized successfully")
     yield
