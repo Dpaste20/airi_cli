@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -98,10 +99,17 @@ async def lifespan(app: FastAPI):
 
     if os.path.exists(DB_PATH):
         try:
-            os.remove(DB_PATH)
+            # Check if it is a directory before deleting
+            if os.path.isdir(DB_PATH):
+                shutil.rmtree(DB_PATH)  # Use shutil to remove directory trees
+            else:
+                os.remove(DB_PATH)  # Use os.remove only if it's a file
+
             print(f"Session database '{DB_PATH}' deleted.")
         except PermissionError:
             print(f"Warning: Could not delete {DB_PATH}.")
+        except Exception as e:
+            print(f"Error deleting database: {e}")
 
 
 app = FastAPI(title="Airi Agent API", lifespan=lifespan)
