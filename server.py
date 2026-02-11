@@ -29,11 +29,19 @@ from utils.GetIPInfo import get_ip_info
 from utils.GetRunningProcesses import get_running_processes
 from utils.GetSystemLogs import get_system_logs
 from utils.GetUptime import get_uptime
+from utils.GmailTools import (
+    create_draft_email,
+    get_unread_emails,
+    search_emails,
+    send_email,
+    send_email_reply,
+)
 from utils.KillProcess import kill_processes
 from utils.OpenApplication import open_application
 from utils.OpenUrl import open_url
 from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
 from utils.RestartSystem import restart_system
+from utils.ShellCommandRunner import bash
 from utils.Shutdown import shutdown_system
 from utils.SleepMode import sleep_mode_system
 from utils.SystemInfo import get_system_info
@@ -65,6 +73,12 @@ TOOLS = [
     restart_system,
     fetch_urls,
     open_url,
+    bash,
+    get_unread_emails,
+    search_emails,
+    send_email_reply,
+    create_draft_email,
+    send_email,
 ]
 
 storage_db: Optional[SqliteDb] = None
@@ -279,9 +293,7 @@ async def websocket_chat(websocket: WebSocket):
                 if full_response_text:
                     speak_response(full_response_text)
 
-                    # --- SAVE LOG HERE ---
                     save_chat_log(session_id, message, full_response_text)
-                    # ---------------------
 
                 await websocket.send_json(
                     {
