@@ -14,6 +14,8 @@ qdrant_data/
 
 logs/
 
+airi_browse_dir
+
 test.py
 
 # Python cache and compiled files

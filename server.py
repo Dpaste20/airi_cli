@@ -9,15 +9,23 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
+import emoji
 import speech_recognition as sr
 from agno.agent import Agent
 from agno.db.json import JsonDb
 from agno.models.ollama import Ollama
+from agno.skills import LocalSkills, Skills
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from utils.CalendarTools import (
+    create_event,
+    delete_event,
+    get_upcoming_events,
+)
+from utils.CronTools import add_cron_job, delete_cron_job, get_cron_jobs
 from utils.FetchUrls import fetch_urls
 from utils.FileModify import file_modify
 from utils.FileSearch import file_search
@@ -37,6 +45,13 @@ from utils.GmailTools import (
     send_email,
     send_email_reply,
 )
+from utils.GoogleDriveTools import (
+    download_from_drive,
+    list_drive_files,
+    search_drive_files,
+    upload_to_drive,
+)
+from utils.GoogleTasksTools import add_task, complete_task, delete_task, list_tasks
 from utils.KillProcess import kill_processes
 from utils.OpenApplication import open_application
 from utils.OpenUrl import open_url
@@ -80,6 +95,20 @@ TOOLS = [
     send_email_reply,
     create_draft_email,
     send_email,
+    get_cron_jobs,
+    add_cron_job,
+    delete_cron_job,
+    list_drive_files,
+    search_drive_files,
+    upload_to_drive,
+    download_from_drive,
+    get_upcoming_events,
+    create_event,
+    delete_event,
+    list_tasks,
+    add_task,
+    complete_task,
+    delete_task,
 ]
 
 storage_db: Optional[JsonDb] = None
@@ -151,11 +180,16 @@ def get_agent(session_id: str) -> Agent:
 
     return Agent(
         session_id=session_id,
-        model=Ollama(id="gpt-oss:120b-cloud"),
+        model=Ollama(id="glm-5:cloud"),
         system_message=sys_msg,
         db=storage_db,
         knowledge=kb,
         tools=TOOLS,
+        skills=Skills(loaders=[LocalSkills("./skills/agent-browser")]),
+        instructions=[
+            "You have access to specialized skills.",
+            "Use get_skill_instructions to load full guidance when needed.",
+        ],
         search_knowledge=True,
         add_history_to_context=True,
         num_history_runs=10,
@@ -174,8 +208,11 @@ class ChatResponse(BaseModel):
 
 def speak_response(text: str):
     stop_audio()
+
+    clean_text = emoji.replace_emoji(text, replace="")
+
     try:
-        subprocess.Popen(["spd-say", text])
+        subprocess.Popen(["spd-say", clean_text])
     except Exception as e:
         print(f"Error executing spd-say: {e}")
 
