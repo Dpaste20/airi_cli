@@ -192,7 +192,6 @@ def get_agent(session_id: str) -> Agent:
             "You have access to specialized skills.",
             "Use get_skill_instructions to load full guidance when needed.",
             "CRITICAL: Before using create_event, get_upcoming_events, or add_task, YOU MUST ALWAYS call get_current_datetime to get the current date and time.",
-            "When converting the date from get_current_datetime (DD/MM/YYYY) for Google APIs, ensure you convert it to YYYY-MM-DD format.",
         ],
         search_knowledge=True,
         add_history_to_context=True,
