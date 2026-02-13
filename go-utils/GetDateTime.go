@@ -11,6 +11,7 @@ type DateTimeInfo struct {
 	CurrentDate string `json:"current_date"`
 	DayOfWeek   string `json:"day_of_week"`
 	Timezone    string `json:"timezone"`
+	IsoDateTime string `json:"iso_datetime"`
 }
 
 func main() {
@@ -19,9 +20,11 @@ func main() {
 	info := DateTimeInfo{
 		CurrentTime: now.Format("15:04:05"),
 
-		CurrentDate: now.Format("02/01/2006"),
+		CurrentDate: now.Format("2006-01-02"),
 		DayOfWeek:   now.Weekday().String(),
 		Timezone:    now.Location().String(),
+		// Formats as 2026-02-13T15:04:05+05:30 (Includes timezone offset!)
+		IsoDateTime: now.Format(time.RFC3339),
 	}
 
 	jsonData, err := json.Marshal(info)
