@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -79,6 +80,12 @@ var (
 	thinkingDisabledStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("39")).
 				Bold(true)
+
+	notificationStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255")).
+				Background(lipgloss.Color("63")).
+				Bold(true).
+				Padding(0, 2)
 )
 
 type ChatRequest struct {
@@ -97,6 +104,8 @@ type WSMessage struct {
 	TokenCount     int     `json:"token_count"`
 	GenerationTime float64 `json:"generation_time"`
 }
+
+type clearNotificationMsg struct{}
 
 type model struct {
 	conn               *websocket.Conn
@@ -124,6 +133,8 @@ type model struct {
 	awaitingVoiceChunk bool
 	pendingVoiceInput  string
 	isSpeaking         bool
+	lastAiResponse     string
+	notification       string
 }
 
 func initialModel(conn *websocket.Conn) model {
@@ -174,6 +185,8 @@ func initialModel(conn *websocket.Conn) model {
 		awaitingVoiceChunk: false,
 		pendingVoiceInput:  "",
 		isSpeaking:         false,
+		lastAiResponse:     "",
+		notification:       "",
 	}
 }
 
@@ -193,6 +206,11 @@ func (m model) renderMarkdown(text string) string {
 }
 
 func (m model) renderStatusBar() string {
+	if m.notification != "" {
+		msg := notificationStyle.Render(m.notification)
+		return statusBarStyle.Width(m.width).Render(lipgloss.PlaceHorizontal(m.width, lipgloss.Center, msg))
+	}
+
 	var connStatus string
 	if m.connected {
 		connStatus = statusConnectedStyle.Render("● Connected")
@@ -284,6 +302,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.recordCmd.Process.Kill()
 			}
 			return m, tea.Quit
+
+		// Ctrl+Y to Copy
+		case tea.KeyCtrlY:
+			if m.lastAiResponse != "" {
+				err := clipboard.WriteAll(m.lastAiResponse)
+				if err == nil {
+					m.notification = "✓ Copied to clipboard"
+				} else {
+					m.notification = "✗ Copy failed"
+				}
+
+				return m, tea.Tick(time.Millisecond*500, func(_ time.Time) tea.Msg {
+					return clearNotificationMsg{}
+				})
+			}
+			return m, nil
 
 		case tea.KeySpace:
 
@@ -417,6 +451,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(sendCmd, m.spinner.Tick)
 		}
 
+	case clearNotificationMsg:
+		m.notification = ""
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -539,6 +576,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			m.detectThinkingModeChange(m.currentAiChunk)
+
+			m.lastAiResponse = m.currentAiChunk
 
 			renderedContent := m.renderMarkdown(m.currentAiChunk)
 
