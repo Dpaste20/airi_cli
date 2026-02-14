@@ -54,6 +54,7 @@ from utils.GoogleDriveTools import (
 )
 from utils.GoogleTasksTools import add_task, complete_task, delete_task, list_tasks
 from utils.KillProcess import kill_processes
+from utils.MapTools import get_directions, map_search
 from utils.OpenApplication import open_application
 from utils.OpenUrl import open_url
 from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
@@ -111,6 +112,8 @@ TOOLS = [
     complete_task,
     delete_task,
     agent_browser,
+    map_search,
+    get_directions,
 ]
 
 storage_db: Optional[JsonDb] = None
