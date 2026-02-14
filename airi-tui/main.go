@@ -40,6 +40,18 @@ var (
 	commandStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	recordingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Blink(true)
 
+	userBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("5")).
+			Padding(0, 1).
+			Margin(0, 0)
+
+	aiBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("2")).
+			Padding(0, 1).
+			Margin(0, 0)
+
 	statusBarStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("230")).
 			Background(lipgloss.Color("236")).
@@ -133,7 +145,7 @@ func initialModel(conn *websocket.Conn) model {
 
 	renderer, _ := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(80),
+		glamour.WithWordWrap(74),
 	)
 
 	s := spinner.New()
@@ -357,11 +369,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			var displayInput string
+
+			var label string
 			if strings.HasPrefix(input, "/") {
-				displayInput = commandStyle.Render("You: ") + input
+				label = commandStyle.Render("You:")
 			} else {
-				displayInput = senderStyle.Render("You: ") + input
+				label = senderStyle.Render("You:")
 			}
+
+			fullText := fmt.Sprintf("%s %s", label, input)
+			displayInput = userBoxStyle.Width(m.width - 6).Render(fullText)
 
 			m.messages = append(m.messages, displayInput)
 			m.messageCount++
@@ -374,6 +391,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tokensPerSecond = 0.0
 
 			content := strings.Join(m.messages, "\n")
+
 			header := aiStyle.Render("Airi:")
 			content += "\n" + header + " " + m.spinner.View()
 
@@ -416,14 +434,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.renderer, _ = glamour.NewTermRenderer(
 			glamour.WithStandardStyle("dark"),
-			glamour.WithWordWrap(msg.Width-2),
+			glamour.WithWordWrap(msg.Width-8),
 		)
 
 		content := strings.Join(m.messages, "\n")
 		if m.currentAiChunk != "" {
 			renderedChunk := m.renderMarkdown(m.currentAiChunk)
-			header := aiStyle.Render("Airi:") + "\n"
-			content += "\n" + header + renderedChunk
+
+			fullContent := aiStyle.Render("Airi:") + "\n" + renderedChunk
+			boxedContent := aiBoxStyle.Width(m.width - 6).Render(fullContent)
+			content += "\n" + boxedContent
 		} else if m.isLoading {
 			header := aiStyle.Render("Airi:")
 			content += "\n" + header + " " + m.spinner.View()
@@ -464,7 +484,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				voiceText := strings.TrimPrefix(msg.Content, "🎤 *Voice:* ")
 				voiceText = strings.TrimSpace(voiceText)
 
-				displayInput := senderStyle.Render("You: ") + voiceText
+				formattedVoice := fmt.Sprintf("%s %s", senderStyle.Render("You:"), voiceText)
+				displayInput := userBoxStyle.Width(m.width - 6).Render(formattedVoice)
+
 				m.messages = append(m.messages, displayInput)
 				m.messageCount++
 				m.pendingVoiceInput = voiceText
@@ -488,10 +510,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.detectThinkingModeChange(msg.Content)
 
 				renderedContent := m.renderMarkdown(m.currentAiChunk)
-				header := aiStyle.Render("Airi:") + "\n"
+
+				fullContent := aiStyle.Render("Airi:") + "\n" + renderedContent
+				boxedContent := aiBoxStyle.Width(m.width - 6).Render(fullContent)
 
 				displayMessages := append([]string{}, m.messages...)
-				displayMessages = append(displayMessages, header+renderedContent)
+				displayMessages = append(displayMessages, boxedContent)
 
 				m.viewport.SetContent(strings.Join(displayMessages, "\n"))
 				m.viewport.GotoBottom()
@@ -517,9 +541,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.detectThinkingModeChange(m.currentAiChunk)
 
 			renderedContent := m.renderMarkdown(m.currentAiChunk)
-			header := aiStyle.Render("Airi:") + "\n"
 
-			m.messages = append(m.messages, header+renderedContent)
+			fullContent := aiStyle.Render("Airi:") + "\n" + renderedContent
+			boxedContent := aiBoxStyle.Width(m.width - 6).Render(fullContent)
+
+			m.messages = append(m.messages, boxedContent)
 			m.messageCount++
 			m.currentAiChunk = ""
 			m.isLoading = false
