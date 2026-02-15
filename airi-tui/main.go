@@ -73,14 +73,6 @@ var (
 				Foreground(lipgloss.Color("255")).
 				Bold(true)
 
-	thinkingEnabledStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("214")).
-				Bold(true)
-
-	thinkingDisabledStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("39")).
-				Bold(true)
-
 	notificationStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("255")).
 				Background(lipgloss.Color("63")).
@@ -123,7 +115,6 @@ type model struct {
 	startTime          time.Time
 	width              int
 	height             int
-	thinkingMode       bool
 	generatedTokens    int
 	generationStart    time.Time
 	generationTime     time.Duration
@@ -177,7 +168,6 @@ func initialModel(conn *websocket.Conn) model {
 		startTime:          time.Now(),
 		width:              defaultWidth,
 		height:             24,
-		thinkingMode:       true,
 		generatedTokens:    0,
 		generationTime:     0,
 		tokensPerSecond:    0.0,
@@ -235,17 +225,6 @@ func (m model) renderStatusBar() string {
 		statusLabelStyle.Render("Session:"),
 		statusValueStyle.Render(m.sessionID))
 
-	var thinkMode string
-	if m.thinkingMode {
-		thinkMode = fmt.Sprintf("%s %s",
-			statusLabelStyle.Render("Mode:"),
-			thinkingEnabledStyle.Render("🧠 Think"))
-	} else {
-		thinkMode = fmt.Sprintf("%s %s",
-			statusLabelStyle.Render("Mode:"),
-			thinkingDisabledStyle.Render("⚡ Fast"))
-	}
-
 	genTokens := fmt.Sprintf("%s %s",
 		statusLabelStyle.Render("Tokens:"),
 		statusValueStyle.Render(fmt.Sprintf("%d", m.generatedTokens)))
@@ -265,8 +244,6 @@ func (m model) renderStatusBar() string {
 		"  ",
 		msgCount,
 		"  ",
-		thinkMode,
-		"  ",
 		sessionInfo,
 		"  ",
 		genTokens,
@@ -277,14 +254,6 @@ func (m model) renderStatusBar() string {
 	)
 
 	return statusBarStyle.Width(m.width).Render(statusContent)
-}
-
-func (m *model) detectThinkingModeChange(content string) {
-	if strings.Contains(content, "Thinking mode disabled") || strings.Contains(content, "Responses will be faster") {
-		m.thinkingMode = false
-	} else if strings.Contains(content, "Thinking mode enabled") || strings.Contains(content, "Model will reason") {
-		m.thinkingMode = true
-	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -544,8 +513,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.tokensPerSecond = float64(m.generatedTokens) / elapsed
 				}
 
-				m.detectThinkingModeChange(msg.Content)
-
 				renderedContent := m.renderMarkdown(m.currentAiChunk)
 
 				fullContent := aiStyle.Render("Airi:") + "\n" + renderedContent
@@ -574,8 +541,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.generationTime.Seconds() > 0 {
 				m.tokensPerSecond = float64(m.generatedTokens) / m.generationTime.Seconds()
 			}
-
-			m.detectThinkingModeChange(m.currentAiChunk)
 
 			m.lastAiResponse = m.currentAiChunk
 
