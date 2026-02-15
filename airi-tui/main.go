@@ -53,6 +53,17 @@ var (
 			Padding(0, 1).
 			Margin(0, 0)
 
+	helpBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("63")).
+			Padding(1, 2).
+			Align(lipgloss.Center)
+
+	helpTitleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214")).
+			Bold(true).
+			Underline(true)
+
 	statusBarStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("230")).
 			Background(lipgloss.Color("236")).
@@ -126,6 +137,7 @@ type model struct {
 	isSpeaking         bool
 	lastAiResponse     string
 	notification       string
+	showHelp           bool
 }
 
 func initialModel(conn *websocket.Conn) model {
@@ -177,6 +189,7 @@ func initialModel(conn *websocket.Conn) model {
 		isSpeaking:         false,
 		lastAiResponse:     "",
 		notification:       "",
+		showHelp:           false,
 	}
 }
 
@@ -265,6 +278,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case tea.KeyMsg:
+
+		if m.showHelp {
+			if msg.Type == tea.KeyCtrlX {
+				m.showHelp = false
+			}
+
+			if msg.Type == tea.KeyCtrlC {
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
 			if m.isRecording && m.recordCmd != nil {
@@ -272,7 +297,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 
-		// Ctrl+Y to Copy
 		case tea.KeyCtrlY:
 			if m.lastAiResponse != "" {
 				err := clipboard.WriteAll(m.lastAiResponse)
@@ -355,6 +379,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyEnter:
 			input := m.textInput.Value()
 			if input == "" {
+				return m, nil
+			}
+
+			if input == "/help" {
+				m.showHelp = true
+				m.textInput.SetValue("")
 				return m, nil
 			}
 
@@ -596,6 +626,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() string {
 	if m.err != nil {
 		return errStyle.Render(fmt.Sprintf("\nFatal Error: %v\nRestart the application.", m.err))
+	}
+
+	if m.showHelp {
+		title := helpTitleStyle.Render("Commands / Short Cuts :")
+
+		content := fmt.Sprintf(`
+%s
+
+1. /help      : To get help
+2. ctrl + y   : To copy the response from Airi
+
+%s
+`, title, infoStyle.Render("Press ctrl + x to exit \"help\" screen"))
+
+		helpBox := helpBoxStyle.Render(content)
+
+		return lipgloss.Place(
+			m.width,
+			m.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			helpBox,
+		)
 	}
 
 	return fmt.Sprintf(
