@@ -63,6 +63,7 @@ from utils.ShellCommandRunner import bash
 from utils.Shutdown import shutdown_system
 from utils.SleepMode import sleep_mode_system
 from utils.SystemInfo import get_system_info
+from utils.TelegramTools import list_telegram_contacts, send_telegram_message
 
 logging.getLogger("agno").setLevel(logging.ERROR)
 load_dotenv()
@@ -114,6 +115,8 @@ TOOLS = [
     agent_browser,
     map_search,
     get_directions,
+    list_telegram_contacts,
+    send_telegram_message,
 ]
 
 storage_db: Optional[JsonDb] = None
@@ -185,7 +188,7 @@ def get_agent(session_id: str) -> Agent:
 
     return Agent(
         session_id=session_id,
-        model=Ollama(id="glm-5:cloud"),
+        model=Ollama(id="gpt-oss:120b-cloud"),
         system_message=sys_msg,
         db=storage_db,
         knowledge=kb,
