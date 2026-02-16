@@ -7,6 +7,9 @@
 # Temporary folders
 tmp/
 
+config.yaml
+
+
 qdrant_data/
 
 Airi_created_files/
