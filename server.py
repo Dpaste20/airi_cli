@@ -188,7 +188,7 @@ def get_agent(session_id: str) -> Agent:
 
     return Agent(
         session_id=session_id,
-        model=Ollama(id="gpt-oss:120b-cloud"),
+        model=Ollama(id="gpt-oss:120b-cloud", options={"temperature": 0.3}),
         system_message=sys_msg,
         db=storage_db,
         knowledge=kb,
@@ -312,7 +312,25 @@ async def websocket_chat(websocket: WebSocket):
 
             session_id = data.get("session_id", f"ws_{id(websocket)}")
 
-            if not message or message == "Could not understand audio":
+            if not message:
+                continue
+
+            if message == "Could not understand audio":
+                error_response = "Could not understand audio, would you try again"
+
+                await websocket.send_json({"type": "start"})
+                await websocket.send_json({"type": "chunk", "content": error_response})
+                await websocket.send_json(
+                    {
+                        "type": "end",
+                        "token_count": len(error_response) // 4,
+                        "generation_time": 0,
+                    }
+                )
+
+                speak_response(error_response)
+                save_chat_log(session_id, "Audio unreadable", error_response)
+
                 continue
 
             try:
