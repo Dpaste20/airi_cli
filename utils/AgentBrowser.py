@@ -3,7 +3,7 @@ import os
 
 from agno.tools import tool
 
-BROWSER_DEBUG_PORT = os.getenv("BO_DEBUG_PORT", 9222)
+BROWSER_DEBUG_PORT = int(os.getenv("BO_DEBUG_PORT", 9222))
 BROWSER_HOST = os.getenv("BO_DEBUG_HOST", "127.0.0.1")
 
 
@@ -45,24 +45,33 @@ async def agent_browser(args: str) -> str:
     if not await is_browser_running():
         print(f"Browser not detected. Launching Brave on port {BROWSER_DEBUG_PORT}...")
         try:
+            user_data_dir = os.path.abspath("airi_browse_dir")
+
             await asyncio.create_subprocess_exec(
                 "brave-browser",
                 f"--remote-debugging-port={BROWSER_DEBUG_PORT}",
-                "--user-data-dir=airi_browse_dir",
+                f"--user-data-dir={user_data_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-default-apps",
+                "--disable-popup-blocking",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
             print("Waiting for debugging port to initialize...")
 
             port_ready = False
-            for _ in range(10):
+            for _ in range(15):
                 await asyncio.sleep(1)
                 if await is_browser_running():
                     port_ready = True
                     break
 
             if not port_ready:
-                return f"Error: Brave launched, but port {BROWSER_DEBUG_PORT} did not open within 10 seconds."
+                return f"Error: Brave launched, but port {BROWSER_DEBUG_PORT} did not open within 15 seconds."
+
+            print("Port is open. Waiting for DevTools Protocol to stabilize...")
+            await asyncio.sleep(3)
 
             print(
                 f"Port ready! Running 'agent-browser connect {BROWSER_DEBUG_PORT}'..."
