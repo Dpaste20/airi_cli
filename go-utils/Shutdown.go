@@ -18,7 +18,7 @@ func main() {
 		return
 	}
 
-	fmt.Println("[{\"status\": \"success\", \"message\": \"Airi and system shutdown initiated after 5 seconds.\"}]")
+	fmt.Println("[{\"status\": \"success\", \"message\": \"Airi and system shutdown initiated after 3 seconds.\"}]")
 }
 
 func printError(msg string) {

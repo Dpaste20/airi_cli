@@ -1,4 +1,3 @@
-import json
 import os
 import subprocess
 
@@ -9,6 +8,9 @@ BINARY_PATH = os.path.join(os.getcwd(), "go-utils", "Shutdown")
 
 @tool
 def shutdown_system() -> list:
+    """
+    Initiates a full system shutdown after a 3-second delay.
+    """
     if not os.path.exists(BINARY_PATH):
         return [
             {
@@ -17,18 +19,21 @@ def shutdown_system() -> list:
         ]
 
     try:
-        result = subprocess.run(
+        # Popen spawns the process in the background without blocking Python
+        subprocess.Popen(
             [BINARY_PATH],
-            capture_output=True,
-            text=True,
-            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,  # Detaches the Go process from Airi
         )
 
-        return json.loads(result.stdout)
+        # Immediately return the acknowledgement to the agent context
+        return [
+            {
+                "status": "success",
+                "message": "Airi and system shutdown initiated. System will power off in 3 seconds.",
+            }
+        ]
 
-    except json.JSONDecodeError:
-        return [{"error": "Failed to decode JSON from Go utility"}]
-    except subprocess.CalledProcessError as e:
-        return [{"error": f"Go utility execution failed: {e}"}]
     except Exception as e:
         return [{"error": str(e)}]

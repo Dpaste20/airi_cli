@@ -17,18 +17,19 @@ def sleep_mode_system() -> list:
         ]
 
     try:
-        result = subprocess.run(
+        subprocess.Popen(
             [BINARY_PATH],
-            capture_output=True,
-            text=True,
-            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
 
-        return json.loads(result.stdout)
+        return [
+            {
+                "status": "success",
+                "message": "Sleep mode initiated. System will suspend in 5 seconds.",
+            }
+        ]
 
-    except json.JSONDecodeError:
-        return [{"error": "Failed to decode JSON from Go utility"}]
-    except subprocess.CalledProcessError as e:
-        return [{"error": f"Go utility execution failed: {e}"}]
     except Exception as e:
         return [{"error": str(e)}]
