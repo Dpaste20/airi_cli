@@ -59,6 +59,7 @@ from utils.OpenApplication import open_application
 from utils.OpenUrl import open_url
 from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
 from utils.RestartSystem import restart_system
+from utils.RunDiagnosticTool import run_system_diagnostic
 from utils.ShellCommandRunner import bash
 from utils.Shutdown import shutdown_system
 from utils.SleepMode import sleep_mode_system
@@ -117,6 +118,7 @@ TOOLS = [
     get_directions,
     list_telegram_contacts,
     send_telegram_message,
+    run_system_diagnostic,
 ]
 
 storage_db: Optional[JsonDb] = None
