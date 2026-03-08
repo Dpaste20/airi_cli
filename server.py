@@ -26,6 +26,15 @@ from utils.CalendarTools import (
     delete_event,
     get_upcoming_events,
 )
+from utils.CameraTools import (
+    delete_capture,
+    get_recording_status,
+    list_captures,
+    start_recording,
+    stop_recording,
+    take_picture,
+    take_timelapse,
+)
 from utils.CronTools import add_cron_job, delete_cron_job, get_cron_jobs
 from utils.FetchUrls import fetch_urls
 from utils.FileModify import file_modify
@@ -54,6 +63,7 @@ from utils.GoogleDriveTools import (
 )
 from utils.GoogleTasksTools import add_task, complete_task, delete_task, list_tasks
 from utils.KillProcess import kill_processes
+from utils.LaunchGames import get_game_list, launch_game
 from utils.MapTools import get_directions, map_search
 from utils.OpenApplication import open_application
 from utils.OpenUrl import open_url
@@ -119,6 +129,15 @@ TOOLS = [
     list_telegram_contacts,
     send_telegram_message,
     run_system_diagnostic,
+    delete_capture,
+    get_recording_status,
+    list_captures,
+    start_recording,
+    stop_recording,
+    take_picture,
+    take_timelapse,
+    launch_game,
+    get_game_list,
 ]
 
 storage_db: Optional[JsonDb] = None
