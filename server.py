@@ -68,6 +68,7 @@ from utils.MapTools import get_directions, map_search
 from utils.OpenApplication import open_application
 from utils.OpenUrl import open_url
 from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
+from utils.RegionNewsTools import get_region_news, get_top_news, get_topic_news
 from utils.RestartSystem import restart_system
 from utils.RunDiagnosticTool import run_system_diagnostic
 from utils.ShellCommandRunner import bash
@@ -138,6 +139,9 @@ TOOLS = [
     take_timelapse,
     launch_game,
     get_game_list,
+    get_region_news,
+    get_topic_news,
+    get_top_news,
 ]
 
 storage_db: Optional[JsonDb] = None
