@@ -64,6 +64,15 @@ TOOLS = [
     sleep_mode_system,
     fetch_urls,
     open_url,
+    list_songs,
+    play_song,
+    play_playlist,
+    play_random,
+    stop_music,
+    pause_music,
+    next_song,
+    previous_song,
+    set_volume,
 ]
 
 storage_db: Optional[SqliteDb] = None

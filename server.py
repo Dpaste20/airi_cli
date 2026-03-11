@@ -19,6 +19,17 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from utils.PlayMusicTools import (
+    list_songs,
+    next_song,
+    pause_music,
+    play_playlist,
+    play_random,
+    play_song,
+    previous_song,
+    set_volume,
+    stop_music,
+)
 
 from utils.AgentBrowser import agent_browser
 from utils.CalendarTools import (
@@ -142,6 +153,15 @@ TOOLS = [
     get_region_news,
     get_topic_news,
     get_top_news,
+    list_songs,
+    next_song,
+    pause_music,
+    play_playlist,
+    play_random,
+    play_song,
+    previous_song,
+    set_volume,
+    stop_music,
 ]
 
 storage_db: Optional[JsonDb] = None
