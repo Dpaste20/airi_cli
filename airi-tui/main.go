@@ -20,6 +20,8 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gorilla/websocket"
+
+	"airi-tui/commands"
 )
 
 const airiLogo = `
@@ -89,7 +91,43 @@ var (
 				Background(lipgloss.Color("63")).
 				Bold(true).
 				Padding(0, 2)
+
+	acItemStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")).
+			Background(lipgloss.Color("235")).
+			Padding(0, 2)
+
+	acSelectedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("0")).
+			Background(lipgloss.Color("63")).
+			Bold(true).
+			Padding(0, 2)
+
+	acBorderStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("63"))
 )
+
+var knownCommands = []string{
+	"/help",
+	"/save-session",
+	"/resume-session",
+	"/list-sessions",
+}
+
+func getMatches(input string) []string {
+	if !strings.HasPrefix(input, "/") || input == "" {
+		return nil
+	}
+	lower := strings.ToLower(input)
+	var matches []string
+	for _, cmd := range knownCommands {
+		if strings.HasPrefix(cmd, lower) && cmd != lower {
+			matches = append(matches, cmd)
+		}
+	}
+	return matches
+}
 
 type ChatRequest struct {
 	Message         string `json:"message,omitempty"`
@@ -138,6 +176,8 @@ type model struct {
 	lastAiResponse     string
 	notification       string
 	showHelp           bool
+	suggestions        []string
+	suggestionIdx      int
 }
 
 func initialModel(conn *websocket.Conn) model {
@@ -190,6 +230,8 @@ func initialModel(conn *websocket.Conn) model {
 		lastAiResponse:     "",
 		notification:       "",
 		showHelp:           false,
+		suggestions:        nil,
+		suggestionIdx:      -1,
 	}
 }
 
@@ -291,7 +333,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		case tea.KeyCtrlC:
 			if m.isRecording && m.recordCmd != nil {
 				_ = m.recordCmd.Process.Kill()
 			}
@@ -311,6 +353,49 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 			}
 			return m, nil
+
+		case tea.KeyTab:
+			if len(m.suggestions) > 0 {
+
+				idx := m.suggestionIdx
+				if idx < 0 {
+					idx = 0
+				}
+				m.textInput.SetValue(m.suggestions[idx])
+				m.textInput.CursorEnd()
+				m.suggestions = nil
+				m.suggestionIdx = -1
+			}
+			return m, nil
+
+		case tea.KeyUp:
+			if len(m.suggestions) > 0 {
+				m.suggestionIdx--
+				if m.suggestionIdx < 0 {
+					m.suggestionIdx = len(m.suggestions) - 1
+				}
+				return m, nil
+			}
+
+		case tea.KeyDown:
+			if len(m.suggestions) > 0 {
+				m.suggestionIdx++
+				if m.suggestionIdx >= len(m.suggestions) {
+					m.suggestionIdx = 0
+				}
+				return m, nil
+			}
+
+		case tea.KeyEsc:
+			if len(m.suggestions) > 0 {
+				m.suggestions = nil
+				m.suggestionIdx = -1
+				return m, nil
+			}
+			if m.isRecording && m.recordCmd != nil {
+				_ = m.recordCmd.Process.Kill()
+			}
+			return m, tea.Quit
 
 		case tea.KeySpace:
 
@@ -377,6 +462,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyEnter:
+
+			if len(m.suggestions) > 0 && m.suggestionIdx >= 0 {
+				m.textInput.SetValue(m.suggestions[m.suggestionIdx])
+				m.textInput.CursorEnd()
+				m.suggestions = nil
+				m.suggestionIdx = -1
+				return m, nil
+			}
+			m.suggestions = nil
+			m.suggestionIdx = -1
+
 			input := m.textInput.Value()
 			if input == "" {
 				return m, nil
@@ -386,6 +482,51 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showHelp = true
 				m.textInput.SetValue("")
 				return m, nil
+			}
+
+			if result, handled := commands.Dispatch(input, m.sessionID, m.messages); handled {
+				m.textInput.SetValue("")
+
+				cmdLabel := commandStyle.Render("You:")
+				cmdDisplay := userBoxStyle.Width(m.width - 6).Render(
+					fmt.Sprintf("%s %s", cmdLabel, input),
+				)
+				m.messages = append(m.messages, cmdDisplay)
+				m.messageCount++
+
+				if result.ViewportMessage != "" {
+					rendered := m.renderMarkdown(result.ViewportMessage)
+					style := aiBoxStyle
+					if result.IsError {
+						style = aiBoxStyle.BorderForeground(lipgloss.Color("9"))
+					}
+					responseBox := style.Width(m.width - 6).Render(
+						aiStyle.Render("Airi:") + "\n" + rendered,
+					)
+					m.messages = append(m.messages, responseBox)
+					m.messageCount++
+				}
+
+				if result.NewSessionID != "" {
+					m.sessionID = result.NewSessionID
+				}
+
+				if result.RestoredMessages != nil {
+					m.messages = result.RestoredMessages
+					m.messageCount = len(result.RestoredMessages)
+				}
+
+				var notifCmd tea.Cmd
+				if result.Notification != "" {
+					m.notification = result.Notification
+					notifCmd = tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+						return clearNotificationMsg{}
+					})
+				}
+
+				m.viewport.SetContent(strings.Join(m.messages, "\n"))
+				m.viewport.GotoBottom()
+				return m, notifCmd
 			}
 
 			if m.isSpeaking {
@@ -401,17 +542,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.isSpeaking = false
 			}
 
-			var displayInput string
-
-			var label string
-			if strings.HasPrefix(input, "/") {
-				label = commandStyle.Render("You:")
-			} else {
-				label = senderStyle.Render("You:")
-			}
-
-			fullText := fmt.Sprintf("%s %s", label, input)
-			displayInput = userBoxStyle.Width(m.width - 6).Render(fullText)
+			label := senderStyle.Render("You:")
+			displayInput := userBoxStyle.Width(m.width - 6).Render(
+				fmt.Sprintf("%s %s", label, input),
+			)
 
 			m.messages = append(m.messages, displayInput)
 			m.messageCount++
@@ -424,7 +558,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tokensPerSecond = 0.0
 
 			content := strings.Join(m.messages, "\n")
-
 			header := aiStyle.Render("Airi:")
 			content += "\n" + header + " " + m.spinner.View()
 
@@ -620,6 +753,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.textInput, tiCmd = m.textInput.Update(msg)
 	m.viewport, vpCmd = m.viewport.Update(msg)
 
+	newMatches := getMatches(m.textInput.Value())
+	if len(newMatches) != len(m.suggestions) {
+		m.suggestionIdx = -1
+	}
+	m.suggestions = newMatches
+
 	return m, tea.Batch(tiCmd, vpCmd)
 }
 
@@ -634,11 +773,21 @@ func (m model) View() string {
 		content := fmt.Sprintf(`
 %s
 
-1. /help      : To get help
-2. ctrl + y   : To copy the response from Airi
+%s
+  /save-session [name]    Save current conversation
+  /resume-session [name]  Restore a saved conversation
+  /resume-session         List all saved sessions
+  /help                   Show this screen
 
 %s
-`, title, infoStyle.Render("Press ctrl + x to exit \"help\" screen"))
+  ctrl + y   Copy last Airi response to clipboard
+  ctrl + c   Quit
+
+%s
+`, title,
+			commandStyle.Render("Slash Commands:"),
+			commandStyle.Render("Shortcuts:"),
+			infoStyle.Render("Press ctrl + x to close"))
 
 		helpBox := helpBoxStyle.Render(content)
 
@@ -651,10 +800,25 @@ func (m model) View() string {
 		)
 	}
 
+	dropdownBlock := ""
+	if len(m.suggestions) > 0 {
+		var rows []string
+		for i, cmd := range m.suggestions {
+			if i == m.suggestionIdx {
+				rows = append(rows, acSelectedStyle.Render(cmd))
+			} else {
+				rows = append(rows, acItemStyle.Render(cmd))
+			}
+		}
+		inner := strings.Join(rows, "\n")
+		dropdownBlock = acBorderStyle.Render(inner) + "\n"
+	}
+
 	return fmt.Sprintf(
-		"%s\n%s\n%s",
+		"%s\n%s\n%s%s",
 		m.viewport.View(),
 		m.renderStatusBar(),
+		dropdownBlock,
 		m.textInput.View(),
 	) + "\n"
 }
