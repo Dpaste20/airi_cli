@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -117,6 +118,37 @@ var (
 	fileBarStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("214")).
 			Padding(0, 1)
+
+	fpOverlayStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("214")).
+			Background(lipgloss.Color("232")).
+			Padding(1, 2)
+
+	fpTitleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214")).
+			Bold(true).
+			Underline(true)
+
+	fpDirStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("75")).
+			Bold(true)
+
+	fpFileStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252"))
+
+	fpDimStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Italic(true)
+
+	fpSelectedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("0")).
+			Background(lipgloss.Color("214")).
+			Bold(true)
+
+	fpHintStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Italic(true)
 )
 
 var knownCommands = []string{
@@ -143,18 +175,16 @@ func getMatches(input string) []string {
 	return matches
 }
 
-// FileAttachment is the wire format sent to the backend.
 type FileAttachment struct {
 	Name     string `json:"name"`
-	Content  string `json:"content"`   // base64-encoded bytes
-	MimeType string `json:"mime_type"` // "text/plain" | "application/pdf"
+	Content  string `json:"content"`
+	MimeType string `json:"mime_type"`
 }
 
-// AttachedFile holds a file staged for the next outgoing message.
 type AttachedFile struct {
 	Name     string
 	Path     string
-	Content  string // base64
+	Content  string
 	MimeType string
 	Size     int64
 }
@@ -178,6 +208,15 @@ type WSMessage struct {
 }
 
 type clearNotificationMsg struct{}
+
+type fpItem struct {
+	Name     string
+	FullPath string
+	IsDir    bool
+	IsUp     bool
+	Mime     string
+	Size     int64
+}
 
 type model struct {
 	conn               *websocket.Conn
@@ -210,9 +249,13 @@ type model struct {
 	suggestions        []string
 	suggestionIdx      int
 	attachedFiles      []AttachedFile
+
+	showFilePicker bool
+	fpDir          string
+	fpItems        []fpItem
+	fpIdx          int
 }
 
-// mimeFromExt returns the MIME type for supported file extensions.
 func mimeFromExt(path string) (string, bool) {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".txt", ".md", ".log", ".csv":
@@ -224,7 +267,6 @@ func mimeFromExt(path string) (string, bool) {
 	}
 }
 
-// expandHome replaces a leading ~ with the user's home directory.
 func expandHome(path string) string {
 	if strings.HasPrefix(path, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -234,7 +276,6 @@ func expandHome(path string) string {
 	return path
 }
 
-// loadAttachedFile reads the file at path, validates it, and returns an AttachedFile.
 func loadAttachedFile(rawPath string) (AttachedFile, error) {
 	path := expandHome(strings.TrimSpace(rawPath))
 
@@ -247,7 +288,7 @@ func loadAttachedFile(rawPath string) (AttachedFile, error) {
 	if err != nil {
 		return AttachedFile{}, fmt.Errorf("file not found: %s", path)
 	}
-	const maxBytes = 20 * 1024 * 1024 // 20 MB guard
+	const maxBytes = 20 * 1024 * 1024
 	if info.Size() > maxBytes {
 		return AttachedFile{}, fmt.Errorf("file too large (max 20 MB): %s", filepath.Base(path))
 	}
@@ -264,6 +305,142 @@ func loadAttachedFile(rawPath string) (AttachedFile, error) {
 		MimeType: mime,
 		Size:     info.Size(),
 	}, nil
+}
+
+func loadFpDir(dir string) ([]fpItem, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	var dirs, files []fpItem
+
+	for _, e := range entries {
+
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		fullPath := filepath.Join(dir, e.Name())
+		if e.IsDir() {
+			dirs = append(dirs, fpItem{
+				Name:     e.Name() + "/",
+				FullPath: fullPath,
+				IsDir:    true,
+			})
+		} else {
+			info, _ := e.Info()
+			size := int64(0)
+			if info != nil {
+				size = info.Size()
+			}
+			mime, _ := mimeFromExt(e.Name())
+			files = append(files, fpItem{
+				Name:     e.Name(),
+				FullPath: fullPath,
+				Mime:     mime,
+				Size:     size,
+			})
+		}
+	}
+
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name < dirs[j].Name })
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+
+	var items []fpItem
+
+	if filepath.Dir(dir) != dir {
+		items = append(items, fpItem{
+			Name:     "../",
+			FullPath: filepath.Dir(dir),
+			IsDir:    true,
+			IsUp:     true,
+		})
+	}
+	items = append(items, dirs...)
+	items = append(items, files...)
+	return items, nil
+}
+
+func (m model) renderFilePicker() string {
+	const maxVisible = 16
+
+	title := fpTitleStyle.Render("📂 File Picker")
+	path := fpHintStyle.Render(" " + m.fpDir)
+
+	start := 0
+	if m.fpIdx >= maxVisible {
+		start = m.fpIdx - maxVisible + 1
+	}
+	end := start + maxVisible
+	if end > len(m.fpItems) {
+		end = len(m.fpItems)
+	}
+
+	var rows []string
+	for i := start; i < end; i++ {
+		item := m.fpItems[i]
+
+		var label string
+		switch {
+		case item.IsUp:
+			label = fpDirStyle.Render("  ↑  ../")
+		case item.IsDir:
+			label = fpDirStyle.Render("  📁 " + item.Name)
+		case item.Mime != "":
+			icon := "📄 "
+			if item.Mime == "application/pdf" {
+				icon = "📕 "
+			}
+			sizeStr := fmt.Sprintf("%.1f KB", float64(item.Size)/1024)
+			if item.Size >= 1024*1024 {
+				sizeStr = fmt.Sprintf("%.1f MB", float64(item.Size)/1024/1024)
+			}
+			label = fpFileStyle.Render(fmt.Sprintf("  %s%-36s %s", icon, item.Name, sizeStr))
+		default:
+			label = fpDimStyle.Render("  ·  " + item.Name)
+		}
+
+		if i == m.fpIdx {
+
+			plain := item.Name
+			if item.IsUp {
+				plain = "../"
+			}
+			_ = plain
+			label = fpSelectedStyle.Render(label)
+		}
+
+		rows = append(rows, label)
+	}
+
+	scrollInfo := ""
+	if len(m.fpItems) > maxVisible {
+		scrollInfo = fpHintStyle.Render(fmt.Sprintf(" %d/%d", m.fpIdx+1, len(m.fpItems)))
+	}
+
+	empty := ""
+	if len(m.fpItems) == 0 {
+		empty = fpDimStyle.Render("  (empty directory)")
+	}
+
+	hints := fpHintStyle.Render("↑↓ navigate  Enter select/open  Backspace parent  Esc close")
+
+	innerWidth := m.width - 8
+	if innerWidth < 40 {
+		innerWidth = 40
+	}
+
+	body := fmt.Sprintf("%s%s\n%s\n\n%s%s\n\n%s",
+		title, scrollInfo,
+		path,
+		strings.Join(rows, "\n"),
+		empty,
+		hints,
+	)
+
+	box := fpOverlayStyle.Width(innerWidth).Render(body)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 func initialModel(conn *websocket.Conn) model {
@@ -319,6 +496,10 @@ func initialModel(conn *websocket.Conn) model {
 		suggestions:        nil,
 		suggestionIdx:      -1,
 		attachedFiles:      nil,
+		showFilePicker:     false,
+		fpDir:              "",
+		fpItems:            nil,
+		fpIdx:              0,
 	}
 }
 
@@ -419,6 +600,98 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 
 	case tea.KeyMsg:
+		if m.showFilePicker {
+			switch msg.Type {
+			case tea.KeyCtrlC:
+				return m, tea.Quit
+
+			case tea.KeyEsc, tea.KeyCtrlF:
+				m.showFilePicker = false
+				return m, nil
+
+			case tea.KeyUp:
+				if m.fpIdx > 0 {
+					m.fpIdx--
+				}
+				return m, nil
+
+			case tea.KeyDown:
+				if m.fpIdx < len(m.fpItems)-1 {
+					m.fpIdx++
+				}
+				return m, nil
+
+			case tea.KeyBackspace:
+				parent := filepath.Dir(m.fpDir)
+				if parent != m.fpDir {
+					items, err := loadFpDir(parent)
+					if err == nil {
+						m.fpDir = parent
+						m.fpItems = items
+						m.fpIdx = 0
+					}
+				}
+				return m, nil
+
+			case tea.KeyEnter:
+				if len(m.fpItems) == 0 {
+					return m, nil
+				}
+				item := m.fpItems[m.fpIdx]
+
+				if item.IsDir {
+					items, err := loadFpDir(item.FullPath)
+					if err != nil {
+						m.notification = "✗ " + err.Error()
+						return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+							return clearNotificationMsg{}
+						})
+					}
+					m.fpDir = item.FullPath
+					m.fpItems = items
+					m.fpIdx = 0
+					return m, nil
+				}
+
+				if item.Mime == "" {
+					m.notification = "⚠ Only .txt and .pdf files can be attached"
+					return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+						return clearNotificationMsg{}
+					})
+				}
+
+				af, err := loadAttachedFile(item.FullPath)
+				if err != nil {
+					m.notification = "✗ " + err.Error()
+					return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+						return clearNotificationMsg{}
+					})
+				}
+
+				for _, existing := range m.attachedFiles {
+					if existing.Path == af.Path {
+						m.notification = "⚠ Already attached: " + af.Name
+						m.showFilePicker = false
+						return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+							return clearNotificationMsg{}
+						})
+					}
+				}
+
+				m.attachedFiles = append(m.attachedFiles, af)
+				m.showFilePicker = false
+
+				sizeStr := fmt.Sprintf("%.1f KB", float64(af.Size)/1024)
+				if af.Size >= 1024*1024 {
+					sizeStr = fmt.Sprintf("%.1f MB", float64(af.Size)/1024/1024)
+				}
+				m.notification = fmt.Sprintf("📎 %s (%s) attached", af.Name, sizeStr)
+				return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+					return clearNotificationMsg{}
+				})
+			}
+			return m, nil
+		}
 
 		if m.showHelp {
 			if msg.Type == tea.KeyCtrlX {
@@ -461,6 +734,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return clearNotificationMsg{}
 				})
 			}
+			return m, nil
+
+		case tea.KeyCtrlF:
+			if m.showFilePicker {
+
+				m.showFilePicker = false
+				return m, nil
+			}
+
+			startDir, err := os.UserHomeDir()
+			if err != nil {
+				startDir, _ = os.Getwd()
+			}
+			items, err := loadFpDir(startDir)
+			if err != nil {
+				m.notification = "✗ Cannot open " + startDir
+				return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+					return clearNotificationMsg{}
+				})
+			}
+			m.fpDir = startDir
+			m.fpItems = items
+			m.fpIdx = 0
+			m.showFilePicker = true
 			return m, nil
 
 		case tea.KeyTab:
@@ -593,7 +890,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// ── /attach <path> ───────────────────────────────────────────
 			if strings.HasPrefix(input, "/attach") {
 				m.textInput.SetValue("")
 				rawPath := strings.TrimSpace(strings.TrimPrefix(input, "/attach"))
@@ -628,7 +924,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 
-				// Prevent duplicate attachments
 				for _, existing := range m.attachedFiles {
 					if existing.Path == af.Path {
 						m.notification = "⚠ Already attached: " + af.Name
@@ -654,7 +949,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// ── /detach ──────────────────────────────────────────────────
 			if input == "/detach" {
 				m.textInput.SetValue("")
 				cmdDisplay := userBoxStyle.Width(m.width - 6).Render(
@@ -767,7 +1061,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(content)
 			m.viewport.GotoBottom()
 
-			// Build file attachments for the wire payload.
 			var wireFiles []FileAttachment
 			for _, af := range m.attachedFiles {
 				wireFiles = append(wireFiles, FileAttachment{
@@ -776,7 +1069,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					MimeType: af.MimeType,
 				})
 			}
-			m.attachedFiles = nil // clear after staging
+			m.attachedFiles = nil
 
 			req := ChatRequest{
 				Message:         input,
@@ -998,6 +1291,10 @@ func (m model) View() string {
 		return errStyle.Render(fmt.Sprintf("\nFatal Error: %v\nRestart the application.", m.err))
 	}
 
+	if m.showFilePicker {
+		return m.renderFilePicker()
+	}
+
 	if m.showHelp {
 		title := helpTitleStyle.Render("Commands / Short Cuts :")
 
@@ -1015,6 +1312,7 @@ func (m model) View() string {
   /help                   Show this screen
 
 %s
+  ctrl + f   Open file picker (browse & attach)
   ctrl + y   Copy last Airi response to clipboard
   ctrl + d   Clear all staged file attachments
   ctrl + c   Quit
