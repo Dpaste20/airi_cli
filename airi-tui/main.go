@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -106,10 +107,22 @@ var (
 	acBorderStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("63"))
+
+	fileBadgeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("0")).
+			Background(lipgloss.Color("214")).
+			Bold(true).
+			Padding(0, 1)
+
+	fileBarStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214")).
+			Padding(0, 1)
 )
 
 var knownCommands = []string{
 	"/help",
+	"/attach",
+	"/detach",
 	"/save-session",
 	"/resume-session",
 	"/list-sessions",
@@ -130,12 +143,29 @@ func getMatches(input string) []string {
 	return matches
 }
 
+// FileAttachment is the wire format sent to the backend.
+type FileAttachment struct {
+	Name     string `json:"name"`
+	Content  string `json:"content"`   // base64-encoded bytes
+	MimeType string `json:"mime_type"` // "text/plain" | "application/pdf"
+}
+
+// AttachedFile holds a file staged for the next outgoing message.
+type AttachedFile struct {
+	Name     string
+	Path     string
+	Content  string // base64
+	MimeType string
+	Size     int64
+}
+
 type ChatRequest struct {
-	Message         string `json:"message,omitempty"`
-	SessionID       string `json:"session_id"`
-	SearchKnowledge bool   `json:"search_knowledge"`
-	AudioData       string `json:"audio_data,omitempty"`
-	Action          string `json:"action,omitempty"`
+	Message         string           `json:"message,omitempty"`
+	SessionID       string           `json:"session_id"`
+	SearchKnowledge bool             `json:"search_knowledge"`
+	AudioData       string           `json:"audio_data,omitempty"`
+	Action          string           `json:"action,omitempty"`
+	Files           []FileAttachment `json:"files,omitempty"`
 }
 
 type WSMessage struct {
@@ -179,6 +209,61 @@ type model struct {
 	showHelp           bool
 	suggestions        []string
 	suggestionIdx      int
+	attachedFiles      []AttachedFile
+}
+
+// mimeFromExt returns the MIME type for supported file extensions.
+func mimeFromExt(path string) (string, bool) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".txt", ".md", ".log", ".csv":
+		return "text/plain", true
+	case ".pdf":
+		return "application/pdf", true
+	default:
+		return "", false
+	}
+}
+
+// expandHome replaces a leading ~ with the user's home directory.
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
+// loadAttachedFile reads the file at path, validates it, and returns an AttachedFile.
+func loadAttachedFile(rawPath string) (AttachedFile, error) {
+	path := expandHome(strings.TrimSpace(rawPath))
+
+	mime, ok := mimeFromExt(path)
+	if !ok {
+		return AttachedFile{}, fmt.Errorf("unsupported file type — only .txt and .pdf are accepted")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return AttachedFile{}, fmt.Errorf("file not found: %s", path)
+	}
+	const maxBytes = 20 * 1024 * 1024 // 20 MB guard
+	if info.Size() > maxBytes {
+		return AttachedFile{}, fmt.Errorf("file too large (max 20 MB): %s", filepath.Base(path))
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return AttachedFile{}, fmt.Errorf("could not read file: %v", err)
+	}
+
+	return AttachedFile{
+		Name:     filepath.Base(path),
+		Path:     path,
+		Content:  base64.StdEncoding.EncodeToString(data),
+		MimeType: mime,
+		Size:     info.Size(),
+	}, nil
 }
 
 func initialModel(conn *websocket.Conn) model {
@@ -233,6 +318,7 @@ func initialModel(conn *websocket.Conn) model {
 		showHelp:           false,
 		suggestions:        nil,
 		suggestionIdx:      -1,
+		attachedFiles:      nil,
 	}
 }
 
@@ -362,6 +448,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				return m, tea.Tick(time.Millisecond*500, func(_ time.Time) tea.Msg {
+					return clearNotificationMsg{}
+				})
+			}
+			return m, nil
+
+		case tea.KeyCtrlD:
+			if len(m.attachedFiles) > 0 {
+				m.attachedFiles = nil
+				m.notification = "✓ Attachments cleared"
+				return m, tea.Tick(time.Millisecond*800, func(_ time.Time) tea.Msg {
 					return clearNotificationMsg{}
 				})
 			}
@@ -497,6 +593,92 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			// ── /attach <path> ───────────────────────────────────────────
+			if strings.HasPrefix(input, "/attach") {
+				m.textInput.SetValue("")
+				rawPath := strings.TrimSpace(strings.TrimPrefix(input, "/attach"))
+
+				cmdLabel := commandStyle.Render("You:")
+				cmdDisplay := userBoxStyle.Width(m.width - 6).Render(
+					fmt.Sprintf("%s %s", cmdLabel, input),
+				)
+				m.messages = append(m.messages, cmdDisplay)
+				m.messageCount++
+
+				if rawPath == "" {
+					msg := "Usage: `/attach <path>`  —  supported: `.txt`, `.pdf`"
+					m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
+						aiStyle.Render("Airi:")+"\n"+m.renderMarkdown(msg),
+					))
+					m.messageCount++
+					m.viewport.SetContent(strings.Join(m.messages, "\n"))
+					m.viewport.GotoBottom()
+					return m, nil
+				}
+
+				af, err := loadAttachedFile(rawPath)
+				if err != nil {
+					errBox := aiBoxStyle.BorderForeground(lipgloss.Color("9")).Width(m.width - 6).Render(
+						aiStyle.Render("Airi:") + "\n" + errStyle.Render("❌ "+err.Error()),
+					)
+					m.messages = append(m.messages, errBox)
+					m.messageCount++
+					m.viewport.SetContent(strings.Join(m.messages, "\n"))
+					m.viewport.GotoBottom()
+					return m, nil
+				}
+
+				// Prevent duplicate attachments
+				for _, existing := range m.attachedFiles {
+					if existing.Path == af.Path {
+						m.notification = "⚠ Already attached: " + af.Name
+						return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+							return clearNotificationMsg{}
+						})
+					}
+				}
+
+				m.attachedFiles = append(m.attachedFiles, af)
+
+				sizeStr := fmt.Sprintf("%.1f KB", float64(af.Size)/1024)
+				if af.Size >= 1024*1024 {
+					sizeStr = fmt.Sprintf("%.1f MB", float64(af.Size)/1024/1024)
+				}
+				okMsg := fmt.Sprintf("📎 Attached **%s** (%s)  —  will be sent with your next message.", af.Name, sizeStr)
+				m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
+					aiStyle.Render("Airi:")+"\n"+m.renderMarkdown(okMsg),
+				))
+				m.messageCount++
+				m.viewport.SetContent(strings.Join(m.messages, "\n"))
+				m.viewport.GotoBottom()
+				return m, nil
+			}
+
+			// ── /detach ──────────────────────────────────────────────────
+			if input == "/detach" {
+				m.textInput.SetValue("")
+				cmdDisplay := userBoxStyle.Width(m.width - 6).Render(
+					fmt.Sprintf("%s %s", commandStyle.Render("You:"), input),
+				)
+				m.messages = append(m.messages, cmdDisplay)
+				m.messageCount++
+
+				if len(m.attachedFiles) == 0 {
+					m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
+						aiStyle.Render("Airi:")+"\n"+infoStyle.Render("No files are currently attached."),
+					))
+				} else {
+					m.attachedFiles = nil
+					m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
+						aiStyle.Render("Airi:")+"\n"+m.renderMarkdown("🗑 All attachments cleared."),
+					))
+				}
+				m.messageCount++
+				m.viewport.SetContent(strings.Join(m.messages, "\n"))
+				m.viewport.GotoBottom()
+				return m, nil
+			}
+
 			if result, handled := commands.Dispatch(input, m.sessionID, m.messages); handled {
 				m.textInput.SetValue("")
 
@@ -556,8 +738,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			label := senderStyle.Render("You:")
+			userBubbleText := input
+			if len(m.attachedFiles) > 0 {
+				var names []string
+				for _, af := range m.attachedFiles {
+					names = append(names, "📎 "+af.Name)
+				}
+				userBubbleText += "\n" + infoStyle.Render(strings.Join(names, "  "))
+			}
 			displayInput := userBoxStyle.Width(m.width - 6).Render(
-				fmt.Sprintf("%s %s", label, input),
+				fmt.Sprintf("%s %s", label, userBubbleText),
 			)
 
 			m.messages = append(m.messages, displayInput)
@@ -577,10 +767,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(content)
 			m.viewport.GotoBottom()
 
+			// Build file attachments for the wire payload.
+			var wireFiles []FileAttachment
+			for _, af := range m.attachedFiles {
+				wireFiles = append(wireFiles, FileAttachment{
+					Name:     af.Name,
+					Content:  af.Content,
+					MimeType: af.MimeType,
+				})
+			}
+			m.attachedFiles = nil // clear after staging
+
 			req := ChatRequest{
 				Message:         input,
 				SessionID:       m.sessionID,
 				SearchKnowledge: false,
+				Files:           wireFiles,
 			}
 
 			sendCmd := func() tea.Msg {
@@ -775,6 +977,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(tiCmd, vpCmd)
 }
 
+func (m model) renderFileBar() string {
+	if len(m.attachedFiles) == 0 {
+		return ""
+	}
+	var badges []string
+	for _, af := range m.attachedFiles {
+		icon := "📄"
+		if af.MimeType == "application/pdf" {
+			icon = "📕"
+		}
+		badges = append(badges, fileBadgeStyle.Render(icon+" "+af.Name))
+	}
+	hint := fileBarStyle.Render("ctrl+d to clear")
+	return strings.Join(badges, " ") + "  " + hint + "\n"
+}
+
 func (m model) View() string {
 	if m.err != nil {
 		return errStyle.Render(fmt.Sprintf("\nFatal Error: %v\nRestart the application.", m.err))
@@ -787,6 +1005,8 @@ func (m model) View() string {
 %s
 
 %s
+  /attach <path>          Attach a .txt or .pdf file to next message
+  /detach                 Remove all staged attachments
   /save-session [name]    Save current conversation
   /resume-session [name]  Restore a saved conversation
   /resume-session         List all saved sessions
@@ -796,6 +1016,7 @@ func (m model) View() string {
 
 %s
   ctrl + y   Copy last Airi response to clipboard
+  ctrl + d   Clear all staged file attachments
   ctrl + c   Quit
 
 %s
@@ -830,10 +1051,11 @@ func (m model) View() string {
 	}
 
 	return fmt.Sprintf(
-		"%s\n%s\n%s%s",
+		"%s\n%s\n%s%s%s",
 		m.viewport.View(),
 		m.renderStatusBar(),
 		dropdownBlock,
+		m.renderFileBar(),
 		m.textInput.View(),
 	) + "\n"
 }

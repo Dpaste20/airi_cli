@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import io
 import logging
 import os
 import shutil
@@ -7,7 +8,7 @@ import subprocess
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import List, Optional
 
 import emoji
 import speech_recognition as sr
@@ -90,6 +91,20 @@ from utils.TelegramTools import list_telegram_contacts, send_telegram_message
 
 logging.getLogger("agno").setLevel(logging.ERROR)
 load_dotenv()
+
+# pypdf is used to extract text from PDF attachments.
+# It is optional — if not installed, PDFs are passed as a base64 note instead.
+try:
+    from pypdf import PdfReader  # pypdf ≥ 3.x
+
+    _PYPDF_AVAILABLE = True
+except ImportError:
+    try:
+        from PyPDF2 import PdfReader  # legacy fallback
+
+        _PYPDF_AVAILABLE = True
+    except ImportError:
+        _PYPDF_AVAILABLE = False
 
 DB_PATH = "tmp/alpha_db"
 
@@ -204,8 +219,12 @@ app.add_middleware(
 )
 
 
-def save_chat_log(session_id: str, user_message: str, agent_response: str):
-
+def save_chat_log(
+    session_id: str,
+    user_message: str,
+    agent_response: str,
+    attached_files: Optional[List[str]] = None,
+):
     log_dir = "logs"
 
     os.makedirs(log_dir, exist_ok=True)
@@ -217,6 +236,8 @@ def save_chat_log(session_id: str, user_message: str, agent_response: str):
         with open(filename, "a", encoding="utf-8") as f:
             current_time = time.strftime("%H:%M:%S")
             f.write(f"--- [{current_time}] Session: {session_id} ---\n")
+            if attached_files:
+                f.write(f"Attachments: {', '.join(attached_files)}\n")
             f.write(f"User: {user_message}\n")
             f.write(f"Airi: {agent_response}\n")
             f.write("\n")
@@ -251,13 +272,84 @@ def get_agent(session_id: str) -> Agent:
     )
 
 
+class FileAttachment(BaseModel):
+    name: str
+    content: str
+    mime_type: str
+
+
 class ChatRequest(BaseModel):
     message: str
     session_id: str = "default_user"
+    files: List[FileAttachment] = []
 
 
 class ChatResponse(BaseModel):
     response: str
+
+
+def _extract_pdf_text(raw_bytes: bytes, name: str) -> str:
+
+    try:
+        reader = PdfReader(io.BytesIO(raw_bytes))
+        pages = []
+        for i, page in enumerate(reader.pages, 1):
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append(f"--- Page {i} ---\n{text.strip()}")
+        if not pages:
+            return (
+                f"[PDF '{name}': no extractable text found (may be scanned/image-only)]"
+            )
+        return "\n\n".join(pages)
+    except Exception as exc:
+        return f"[PDF '{name}': extraction failed — {exc}]"
+
+
+def decode_file_content(file: FileAttachment) -> str:
+    """Decode a FileAttachment into a plain-text string ready for the prompt."""
+    try:
+        raw = base64.b64decode(file.content)
+    except Exception as exc:
+        return f"[File '{file.name}': could not decode base64 — {exc}]"
+
+    if file.mime_type == "application/pdf":
+        return _extract_pdf_text(raw, file.name)
+
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("utf-8", errors="replace")
+
+
+def build_message_with_files(message: str, files: List[FileAttachment]) -> str:
+    """
+    Prepend file contents to the user message as clearly delimited blocks.
+
+    The agent receives a single string like:
+
+        <file name="report.pdf" type="application/pdf">
+        ... extracted text ...
+        </file>
+
+        <file name="notes.txt" type="text/plain">
+        ... raw text ...
+        </file>
+
+        <user_message>
+        Summarise the report above.
+        </user_message>
+    """
+    if not files:
+        return message
+
+    blocks: List[str] = []
+    for f in files:
+        body = decode_file_content(f)
+        blocks.append(f'<file name="{f.name}" type="{f.mime_type}">\n{body}\n</file>')
+
+    joined = "\n\n".join(blocks)
+    return f"{joined}\n\n<user_message>\n{message}\n</user_message>"
 
 
 def speak_response(text: str):
@@ -315,9 +407,11 @@ async def root():
 async def chat(request: ChatRequest):
     try:
         local_agent = get_agent(session_id=request.session_id)
-        response = await local_agent.arun(request.message)
+        full_message = build_message_with_files(request.message, request.files)
+        response = await local_agent.arun(full_message)
 
-        save_chat_log(request.session_id, request.message, response.content)
+        file_names = [f.name for f in request.files] if request.files else None
+        save_chat_log(request.session_id, request.message, response.content, file_names)
 
         return ChatResponse(response=response.content)
     except Exception as e:
@@ -355,6 +449,14 @@ async def websocket_chat(websocket: WebSocket):
             else:
                 message = data.get("message", "")
 
+            raw_files = data.get("files") or []
+            attached_files: List[FileAttachment] = []
+            for rf in raw_files:
+                try:
+                    attached_files.append(FileAttachment(**rf))
+                except Exception as parse_err:
+                    print(f"Skipping malformed file attachment: {parse_err}")
+
             session_id = data.get("session_id", f"ws_{id(websocket)}")
 
             if not message:
@@ -384,7 +486,8 @@ async def websocket_chat(websocket: WebSocket):
 
                 start_time = time.perf_counter()
 
-                response_iterator = local_agent.arun(message, stream=True)
+                full_message = build_message_with_files(message, attached_files)
+                response_iterator = local_agent.arun(full_message, stream=True)
 
                 full_response_text = ""
                 token_count = 0
@@ -406,7 +509,10 @@ async def websocket_chat(websocket: WebSocket):
                 if full_response_text:
                     speak_response(full_response_text)
 
-                    save_chat_log(session_id, message, full_response_text)
+                    file_names = (
+                        [f.name for f in attached_files] if attached_files else None
+                    )
+                    save_chat_log(session_id, message, full_response_text, file_names)
 
                 await websocket.send_json(
                     {
