@@ -19,17 +19,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from utils.PlayMusicTools import (
-    list_songs,
-    next_song,
-    pause_music,
-    play_playlist,
-    play_random,
-    play_song,
-    previous_song,
-    set_volume,
-    stop_music,
-)
 
 from utils.AgentBrowser import agent_browser
 from utils.CalendarTools import (
@@ -78,6 +67,17 @@ from utils.LaunchGames import get_game_list, launch_game
 from utils.MapTools import get_directions, map_search
 from utils.OpenApplication import open_application
 from utils.OpenUrl import open_url
+from utils.PlayMusicTools import (
+    list_songs,
+    next_song,
+    pause_music,
+    play_playlist,
+    play_random,
+    play_song,
+    previous_song,
+    set_volume,
+    stop_music,
+)
 from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
 from utils.RegionNewsTools import get_region_news, get_top_news, get_topic_news
 from utils.RestartSystem import restart_system

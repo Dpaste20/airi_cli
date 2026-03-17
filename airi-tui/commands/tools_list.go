@@ -5,14 +5,11 @@ import (
 	"strings"
 )
 
-// toolEntry holds a tool name and a short description shown in /tools-list.
 type toolEntry struct {
 	Name        string
 	Description string
 }
 
-// agentTools mirrors the TOOLS slice in server.py so the TUI can display them
-// without making a network round-trip.
 var agentTools = []struct {
 	Category string
 	Tools    []toolEntry
