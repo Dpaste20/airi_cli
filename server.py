@@ -92,19 +92,6 @@ from utils.TelegramTools import list_telegram_contacts, send_telegram_message
 logging.getLogger("agno").setLevel(logging.ERROR)
 load_dotenv()
 
-# pypdf is used to extract text from PDF attachments.
-# It is optional — if not installed, PDFs are passed as a base64 note instead.
-try:
-    from pypdf import PdfReader  # pypdf ≥ 3.x
-
-    _PYPDF_AVAILABLE = True
-except ImportError:
-    try:
-        from PyPDF2 import PdfReader  # legacy fallback
-
-        _PYPDF_AVAILABLE = True
-    except ImportError:
-        _PYPDF_AVAILABLE = False
 
 DB_PATH = "tmp/alpha_db"
 
