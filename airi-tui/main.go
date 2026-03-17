@@ -113,6 +113,7 @@ var knownCommands = []string{
 	"/save-session",
 	"/resume-session",
 	"/list-sessions",
+	"/tools-list",
 }
 
 func getMatches(input string) []string {
@@ -241,8 +242,20 @@ func (m model) Init() tea.Cmd {
 		waitForIncomingMessage(m.conn),
 	)
 }
+func preprocessMarkdown(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "### ") {
+			lines[i] = "**" + strings.TrimPrefix(line, "### ") + "**"
+		} else if strings.HasPrefix(line, "## ") {
+			lines[i] = "**" + strings.TrimPrefix(line, "## ") + "**"
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 
 func (m model) renderMarkdown(text string) string {
+	text = preprocessMarkdown(text)
 	tr, err := m.renderer.Render(text)
 	if err != nil {
 		return text
@@ -777,6 +790,8 @@ func (m model) View() string {
   /save-session [name]    Save current conversation
   /resume-session [name]  Restore a saved conversation
   /resume-session         List all saved sessions
+  /tools-list             Show all available agent tools
+  /tools-list [keyword]   Filter tools by name or category
   /help                   Show this screen
 
 %s

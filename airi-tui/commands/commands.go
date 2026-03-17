@@ -34,6 +34,8 @@ func Dispatch(input string, currentSessionID string, messages []string) (Result,
 		return ResumeSession(args)
 	case "list-sessions", "sessions":
 		return ListSessions()
+	case "tools-list", "tools":
+		return ToolsList(args)
 	default:
 		return Result{}, false
 	}
