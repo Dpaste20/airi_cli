@@ -34,7 +34,7 @@ var agentTools = []struct {
 		},
 	},
 	{
-		Category: "📁  Files",
+		Category: "Files",
 		Tools: []toolEntry{
 			{"file_search", "Search files by name or pattern"},
 			{"file_write", "Create or overwrite a file"},
@@ -58,7 +58,7 @@ var agentTools = []struct {
 		},
 	},
 	{
-		Category: " Gmail",
+		Category: "Gmail",
 		Tools: []toolEntry{
 			{"get_unread_emails", "Fetch unread inbox messages"},
 			{"search_emails", "Search Gmail by query"},
