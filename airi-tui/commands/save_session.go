@@ -38,10 +38,13 @@ func slugify(s string) string {
 }
 
 // SaveSession writes session ID + full chat history to ~/.airi/sessions/.
+
 func SaveSession(args, currentSessionID string, messages []string) (Result, bool) {
-	saveName := slugify(args)
+	var saveName string
 	if args == "" {
-		saveName = fmt.Sprintf("session-%d", time.Now().Unix())
+		saveName = slugify(currentSessionID)
+	} else {
+		saveName = slugify(args)
 	}
 
 	dir, err := sessionsDir()
