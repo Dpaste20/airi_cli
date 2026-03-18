@@ -14,6 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"airi-tui/commands"
+	"math/rand"
+
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -22,8 +25,6 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gorilla/websocket"
-
-	"airi-tui/commands"
 )
 
 const airiLogo = `
@@ -443,6 +444,15 @@ func (m model) renderFilePicker() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
+func newSessionID() string {
+	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 8)
+	for i := range b {
+		b[i] = chars[rand.Intn(len(chars))]
+	}
+	return "terminal-" + string(b)
+}
+
 func initialModel(conn *websocket.Conn) model {
 	ti := textinput.New()
 	ti.Placeholder = "Ask Airi something... (type /help for commands)"
@@ -477,7 +487,7 @@ func initialModel(conn *websocket.Conn) model {
 		messages:           []string{logoDisplay, welcomeMsg},
 		spinner:            s,
 		isLoading:          false,
-		sessionID:          "terminal_user",
+		sessionID:          newSessionID(),
 		connected:          true,
 		messageCount:       0,
 		startTime:          time.Now(),
