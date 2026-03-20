@@ -21,7 +21,9 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from utils.AdbKeyPress import adb_key_press
 from utils.AgentBrowser import agent_browser
+from utils.AgentDevice import agent_device
 from utils.CalendarTools import (
     create_event,
     delete_event,
@@ -164,6 +166,8 @@ TOOLS = [
     previous_song,
     set_volume,
     stop_music,
+    agent_device,
+    adb_key_press,
 ]
 
 storage_db: Optional[JsonDb] = None
