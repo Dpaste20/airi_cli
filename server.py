@@ -477,11 +477,10 @@ async def websocket_chat(websocket: WebSocket):
 
                 start_time = time.perf_counter()
 
-                full_message = build_message_with_files(message, attached_files)
-                response_iterator = local_agent.arun(full_message, stream=True)
+                response_iterator = local_agent.arun(message, stream=True)
 
                 full_response_text = ""
-                token_count = 0
+                last_chunk = None
 
                 async for chunk in response_iterator:
                     content = ""
@@ -492,18 +491,18 @@ async def websocket_chat(websocket: WebSocket):
 
                     if content:
                         full_response_text += content
-                        token_count += len(content) / 4.0
                         await websocket.send_json({"type": "chunk", "content": content})
+                    last_chunk = chunk
 
                 generation_time = time.perf_counter() - start_time
 
+                token_count = 0
+                if last_chunk and hasattr(last_chunk, "metrics") and last_chunk.metrics:
+                    token_count = last_chunk.metrics.total_tokens or 0
+
                 if full_response_text:
                     speak_response(full_response_text)
-
-                    file_names = (
-                        [f.name for f in attached_files] if attached_files else None
-                    )
-                    save_chat_log(session_id, message, full_response_text, file_names)
+                    save_chat_log(session_id, message, full_response_text)
 
                 await websocket.send_json(
                     {
