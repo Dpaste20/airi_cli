@@ -68,6 +68,17 @@ from utils.GoogleTasksTools import add_task, complete_task, delete_task, list_ta
 from utils.KillProcess import kill_processes
 from utils.LaunchGames import get_game_list, launch_game
 from utils.MapTools import get_directions, map_search
+from utils.NotionTools import (
+    append_to_page,
+    create_database_entry,
+    create_page,
+    delete_page,
+    get_database_schema,
+    get_page,
+    query_database,
+    search_notion,
+    update_page_properties,
+)
 from utils.OpenApplication import open_application
 from utils.OpenUrl import open_url
 from utils.PlayMusicTools import (
@@ -168,6 +179,15 @@ TOOLS = [
     stop_music,
     agent_device,
     adb_key_press,
+    append_to_page,
+    create_database_entry,
+    create_page,
+    delete_page,
+    get_database_schema,
+    get_page,
+    query_database,
+    search_notion,
+    update_page_properties,
 ]
 
 storage_db: Optional[JsonDb] = None
