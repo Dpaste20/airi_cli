@@ -80,7 +80,7 @@ Key properties at a glance:
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/your-org/airi.git
+git clone https://github.com/Dpaste20/airi_cli.git
 cd airi
 pip install -r requirements.txt
 ```
