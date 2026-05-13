@@ -9,6 +9,7 @@ tmp/
 
 config.yaml
 
+airi-tui/welcome_msg.yaml
 
 qdrant_data/
 

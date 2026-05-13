@@ -25,6 +25,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gorilla/websocket"
+	"gopkg.in/yaml.v3"
 )
 
 const airiLogo = `
@@ -453,6 +454,35 @@ func newSessionID() string {
 	return "terminal-" + string(b)
 }
 
+func loadWelcomeMessages() []string {
+	defaultMessages := []string{
+		"Connected to Airi Terminal. Awaiting your command.",
+		"Terminal initialized. Let's get to work.",
+	}
+
+	data, err := os.ReadFile("welcome_msg.yaml")
+	if err != nil {
+
+		return defaultMessages
+	}
+
+	var config struct {
+		WelcomeMessages []string `yaml:"welcome_messages"`
+	}
+
+	if err := yaml.Unmarshal(data, &config); err != nil {
+
+		log.Printf("Warning: Failed to parse welcome_msg.yaml: %v", err)
+		return defaultMessages
+	}
+
+	if len(config.WelcomeMessages) == 0 {
+		return defaultMessages
+	}
+
+	return config.WelcomeMessages
+}
+
 func initialModel(conn *websocket.Conn) model {
 	ti := textinput.New()
 	ti.Placeholder = "Ask Airi something... (type /help for commands)"
@@ -466,7 +496,16 @@ func initialModel(conn *websocket.Conn) model {
 	coloredLogo := aiStyle.Render(airiLogo)
 	logoDisplay := lipgloss.PlaceHorizontal(defaultWidth, lipgloss.Center, coloredLogo)
 
-	welcomeMsg := infoStyle.Render("\nConnected to Airi Terminal.\n")
+	welcomeMessages := loadWelcomeMessages()
+	selectedWelcome := welcomeMessages[rand.Intn(len(welcomeMessages))]
+	welcomeMsg := infoStyle.Render("\n" + selectedWelcome + "\n")
+	go func() {
+		time.Sleep(1 * time.Second)
+
+		spokenText := ", , , " + selectedWelcome
+
+		_ = exec.Command("spd-say", spokenText).Run()
+	}()
 
 	vp.SetContent(logoDisplay + "\n" + welcomeMsg)
 
@@ -474,7 +513,6 @@ func initialModel(conn *websocket.Conn) model {
 		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(74),
 	)
-
 	s := spinner.New()
 	s.Spinner = spinner.MiniDot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("cyan"))
