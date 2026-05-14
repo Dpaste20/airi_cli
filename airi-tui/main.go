@@ -1114,10 +1114,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, displayInput)
 			m.messageCount++
 
-			actualPrompt := input
+			inputTrimmed := strings.TrimSpace(input)
+			parts := strings.SplitN(inputTrimmed, " ", 2)
+			cmdTrigger := parts[0]
+			cmdArgs := ""
+			if len(parts) > 1 {
+				cmdArgs = strings.TrimSpace(parts[1])
+			}
 
-			if macroPrompt, exists := toolcommand.CommandMacros[strings.TrimSpace(input)]; exists {
-				actualPrompt = macroPrompt
+			actualPrompt := input
+			if macroPrompt, exists := toolcommand.CommandMacros[cmdTrigger]; exists {
+
+				if strings.Contains(macroPrompt, "%s") {
+					actualPrompt = fmt.Sprintf(macroPrompt, cmdArgs)
+				} else {
+					actualPrompt = macroPrompt
+				}
 			}
 
 			m.currentAiChunk = ""
