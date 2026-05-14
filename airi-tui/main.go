@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"airi-tui/commands"
+	toolcommand "airi-tui/tool-command"
 	"math/rand"
 
 	"github.com/atotto/clipboard"
@@ -153,15 +154,35 @@ var (
 			Italic(true)
 )
 
-var knownCommands = []string{
-	"/help",
-	"/attach",
-	"/detach",
-	"/save-session",
-	"/resume-session",
-	"/list-sessions",
-	"/tools-list",
+func loadKnownCommands() []string {
+	defaultCommands := []string{
+		"/help", "/attach", "/detach", "/save-session",
+		"/resume-session", "/list-sessions", "/tools-list",
+	}
+
+	data, err := os.ReadFile("knownCommands.yaml")
+	if err != nil {
+		log.Printf("Warning: Failed to read knownCommands.yaml, using defaults: %v", err)
+		return defaultCommands
+	}
+
+	var config struct {
+		Commands []string `yaml:"commands"`
+	}
+
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		log.Printf("Warning: Failed to parse knownCommands.yaml: %v", err)
+		return defaultCommands
+	}
+
+	if len(config.Commands) == 0 {
+		return defaultCommands
+	}
+
+	return config.Commands
 }
+
+var knownCommands = loadKnownCommands()
 
 func getMatches(input string) []string {
 	if !strings.HasPrefix(input, "/") || input == "" {
@@ -786,7 +807,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyCtrlF:
 			if m.showFilePicker {
-
 				m.showFilePicker = false
 				return m, nil
 			}
@@ -810,7 +830,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyTab:
 			if len(m.suggestions) > 0 {
-
 				idx := m.suggestionIdx
 				if idx < 0 {
 					idx = 0
@@ -1095,6 +1114,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, displayInput)
 			m.messageCount++
 
+			actualPrompt := input
+
+			if macroPrompt, exists := toolcommand.CommandMacros[strings.TrimSpace(input)]; exists {
+				actualPrompt = macroPrompt
+			}
+
 			m.currentAiChunk = ""
 			m.isLoading = true
 
@@ -1120,7 +1145,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.attachedFiles = nil
 
 			req := ChatRequest{
-				Message:         input,
+				Message:         actualPrompt,
 				SessionID:       m.sessionID,
 				SearchKnowledge: false,
 				Files:           wireFiles,
