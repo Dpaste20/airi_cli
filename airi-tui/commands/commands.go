@@ -36,6 +36,11 @@ func Dispatch(input string, currentSessionID string, messages []string) (Result,
 		return ListSessions()
 	case "tools-list", "tools":
 		return ToolsList(args)
+	case "web-ui", "web":
+		return LaunchWebUI()
+
+	case "lore":
+		return ShowLogo(args)
 	default:
 		return Result{}, false
 	}

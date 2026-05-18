@@ -21,6 +21,8 @@ func main() {
 		"/resume-session",
 		"/list-sessions",
 		"/tools-list",
+		"/web-ui",
+		"/lore",
 	}
 
 	data, err := os.ReadFile(macrosFile)
