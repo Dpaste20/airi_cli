@@ -1,0 +1,209 @@
+package commands
+
+import (
+	"fmt"
+	"image"
+	_ "image/png"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
+)
+
+const asciiArt = "" +
+	"11111111111000011111000000000000100111101001100000000000000000001000111111111111" +
+	"11111111100011111000010000001110000001111111111010000000000000000001111111111111" +
+	"10010000000001100000000000000010000000000000000000000001010000000001111111111111" +
+	"11000000000000000000000000000000000000000000000000000000000000010101111111111110" +
+	"11000100000000000000000000000001000000000000000000000010000011110111111111010001" +
+	"10000000000000000000000000000000000000000000000000000000000010000110111110010000" +
+	"00000000000000000000000000000001000000000000000000000000000000000001111111100001" +
+	"01000000000000000000000000000000000000000000000000000000000000000000001111110001" +
+	"10000000000000000000000000000000100000000000010000000000000000000000000111010000" +
+	"00000000000000000001000000000000100000000000000000000000000111000100000000000000" +
+	"00000000000000000001100000000000111000000000000000001001000000010000000000000000" +
+	"00000001001110000000000000110000000000000000000000001000110000000000000000000010" +
+	"00000011100000000000000100000000000000000010000010001100000000000000000000001000" +
+	"01011111100000000000001100100000000000000000000000011000000000000000000000011000" +
+	"10000110000000000000000010000000000000000000000000010000000000000000000000011111" +
+	"11110100000000000001111100100000000000000000000000100000000000000000000000111111" +
+	"11110100000000000011111111010000000000000000000000000000000000000000000000011011" +
+	"11110000000000000111100000100000000000000000001000000000000000000000000000110000" +
+	"00000000000000000000001100000000000000000010010000000000000000100000110000000000" +
+	"00000000000000000010000000000000000000000000000000000000000010000111000000000000" +
+	"00000000001100000000000000000000000000000000100100000110000000000000000000000001" +
+	"10000000000000000000000000000000000000001001100000011100000001100000100000001110" +
+	"00000000000000000000000000000000010001100010011111000000000000000001111100000000" +
+	"00000000000000100000000000010000111000000011111100000000000000111111000000000000" +
+	"00000000000001000000000001000001110000010011111100000000000011111100000000010000" +
+	"00000000000100000000000100000111000000100111111000000000000011111100000000100000" +
+	"00000000000000000000010000011110000001001111110000000000000111110010000001100000" +
+	"00000001000000000001111000000010001111000000000000001111000100000011100000000000" +
+	"01000000000000111111000000010001000000000000000000111000100000000111000000000000" +
+	"00000000000001110000000000100000000000000000000000111001100000000001100000001000" +
+	"00000000000010000000000000000000000000000010001000000000000000000000000110000000" +
+	"00100000000000000000000000000000000000000000001100000000100000000000111000000001" +
+	"00000100000000000000000000000000000000000001100000000000000000000011100000010000" +
+	"00010000000000000000000000000000000000001111000000001000000000001110000011000010" +
+	"00010000000000000000000000000000000000011100000000000000000000011000010000000100" +
+	"00000000000000000000000000000000000001110000000000000000011100001100000000001000" +
+	"10000000000000000000000000000000000001100000000000000000111000001000000010000100" +
+	"00000000000000000000000000000000000001000000000000000000111" +
+	"00000000000000000000000000000000000000000000000000000000000000000000000000000000" +
+	"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+
+const artLineWidth = 80
+
+func ShowLogo(args string) (Result, bool) {
+
+	artRunes := []rune(asciiArt)
+	var lines []string
+	for i := 0; i < len(artRunes); i += artLineWidth {
+		end := i + artLineWidth
+		if end > len(artRunes) {
+			end = len(artRunes)
+		}
+		lines = append(lines, string(artRunes[i:end]))
+	}
+
+	var imgPath string
+	var attemptedPaths []string
+
+	if args != "" {
+		imgPath = strings.TrimSpace(args)
+		attemptedPaths = append(attemptedPaths, imgPath)
+	} else {
+		cwd, err := os.Getwd()
+		if err != nil {
+			cwd = "."
+		}
+
+		candidates := []string{
+			filepath.Join(cwd, "commands", "logo.png"),
+			filepath.Join(cwd, "airi-tui", "commands", "logo.png"),
+			filepath.Join(cwd, "logo.png"),
+		}
+
+		for _, p := range candidates {
+			attemptedPaths = append(attemptedPaths, p)
+			if _, err := os.Stat(p); err == nil {
+				imgPath = p
+				break
+			}
+		}
+	}
+
+	f, err := os.Open(imgPath)
+	if err != nil {
+		pathsChecked := ""
+		for _, p := range attemptedPaths {
+			pathsChecked += fmt.Sprintf("\n  • `%s`", p)
+		}
+
+		return Result{
+			IsError:         true,
+			ViewportMessage: fmt.Sprintf("❌ **Error opening image:**\n`%v`\n\n**We looked in these locations:**%s", err, pathsChecked),
+			Notification:    "Logo failed",
+		}, true
+	}
+	defer f.Close()
+
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return Result{
+			IsError:         true,
+			ViewportMessage: fmt.Sprintf("❌ **Error decoding image:**\n`%v`", err),
+			Notification:    "Logo failed",
+		}, true
+	}
+
+	bounds := img.Bounds()
+	imgW := bounds.Max.X
+	imgH := bounds.Max.Y
+
+	rows := len(lines)
+	maxCols := 0
+	for _, l := range lines {
+		n := len([]rune(l))
+		if n > maxCols {
+			maxCols = n
+		}
+	}
+
+	cellH := float64(imgH) / float64(rows)
+	cellW := float64(imgW) / float64(maxCols)
+
+	var sb strings.Builder
+	for r, line := range lines {
+		runes := []rune(line)
+		for c, ch := range runes {
+			px := int(float64(c)*cellW + cellW/2)
+			py := int(float64(r)*cellH + cellH/2)
+
+			if px >= imgW {
+				px = imgW - 1
+			}
+			if py >= imgH {
+				py = imgH - 1
+			}
+
+			col := img.At(px, py)
+			rVal, gVal, bVal, _ := col.RGBA()
+			rVal >>= 8
+			gVal >>= 8
+			bVal >>= 8
+
+			sb.WriteString(fmt.Sprintf("\033[38;2;%d;%d;%dm%c", rVal, gVal, bVal, ch))
+		}
+		sb.WriteString("\033[0m\n")
+	}
+
+	logoBlock := lipgloss.NewStyle().Render(sb.String())
+
+	paragraphText := `======================================================================
+SYSTEM INITIALIZATION: AIRI [愛理]
+======================================================================
+OS          : Linux Ubuntu (x86_64)
+ACCESS      : Host-Level / Developer
+DEVELOPER   : Dhruv Paste
+DOB         : Nov 12, 2025
+
+DESCRIPTION : "愛" (Ai) - Empathy, Affection
+              "理" (Ri) - Logic, Reason
+
+              Caring Intelligence Protocol Online
+              Blending empathetic understanding with rational precision.
+======================================================================`
+
+	termWidth, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		termWidth = 120
+	}
+
+	logoWidth := lipgloss.Width(logoBlock)
+
+	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+
+	var finalLayout string
+
+	if termWidth > (logoWidth + lipgloss.Width(paragraphText) + 10) {
+
+		sideBySideStyle := textStyle.Copy().PaddingLeft(4).PaddingTop(4)
+		textBlock := sideBySideStyle.Render(paragraphText)
+
+		finalLayout = lipgloss.JoinHorizontal(lipgloss.Top, logoBlock, textBlock)
+	} else {
+
+		stackedStyle := textStyle.Copy().PaddingTop(2)
+		textBlock := stackedStyle.Render(paragraphText)
+
+		finalLayout = lipgloss.JoinVertical(lipgloss.Left, logoBlock, textBlock)
+	}
+
+	return Result{
+		ViewportMessage: fmt.Sprintf("```\n%s\n```", finalLayout),
+		Notification:    "Lore loaded",
+	}, true
+}
