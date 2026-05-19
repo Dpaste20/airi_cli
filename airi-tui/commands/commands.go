@@ -5,8 +5,9 @@ import "strings"
 type Result struct {
 	Notification string
 
-	NewSessionID string
-
+	NewSessionID    string
+	LogoBlock       string
+	TypingLines     []string
 	ViewportMessage string
 
 	RestoredMessages []string

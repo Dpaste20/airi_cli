@@ -231,6 +231,7 @@ type WSMessage struct {
 }
 
 type clearNotificationMsg struct{}
+type loreTickMsg struct{}
 
 type fpItem struct {
 	Name     string
@@ -277,6 +278,13 @@ type model struct {
 	fpDir          string
 	fpItems        []fpItem
 	fpIdx          int
+
+	// lore typing animation
+	loreTyping      bool
+	loreLogoBlock   string
+	loreTypingLines []string
+	loreTypingIdx   int
+	loreBoxIdx      int
 }
 
 func mimeFromExt(path string) (string, bool) {
@@ -1063,21 +1071,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.messageCount++
 				}
 
-				if result.NewSessionID != "" {
-					m.sessionID = result.NewSessionID
-				}
-
-				if result.RestoredMessages != nil {
-					m.messages = result.RestoredMessages
-					m.messageCount = len(result.RestoredMessages)
-				}
-
 				var notifCmd tea.Cmd
-				if result.Notification != "" {
+				if len(result.TypingLines) > 0 {
+					m.loreLogoBlock = result.LogoBlock
+					m.loreTypingLines = result.TypingLines
+					m.loreTypingIdx = 0
+					m.loreTyping = true
+					// Reserve a slot for the animated side-by-side box
+					m.messages = append(m.messages, "")
+					m.loreBoxIdx = len(m.messages) - 1
+					m.messageCount++
+					notifCmd = tea.Tick(80*time.Millisecond, func(_ time.Time) tea.Msg {
+						return loreTickMsg{}
+					})
+				} else if result.Notification != "" {
 					m.notification = result.Notification
 					notifCmd = tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
 						return clearNotificationMsg{}
 					})
+				}
+
+				if result.NewSessionID != "" {
+					m.sessionID = result.NewSessionID
+				}
+				if result.RestoredMessages != nil {
+					m.messages = result.RestoredMessages
+					m.messageCount = len(result.RestoredMessages)
 				}
 
 				m.viewport.SetContent(strings.Join(m.messages, "\n"))
@@ -1174,6 +1193,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.textInput.SetValue("")
 			return m, tea.Batch(sendCmd, m.spinner.Tick)
+		}
+
+	case loreTickMsg:
+		if m.loreTyping && m.loreTypingIdx < len(m.loreTypingLines) {
+			m.loreTypingIdx++
+			typedBlock := lipgloss.NewStyle().PaddingLeft(4).PaddingTop(2).
+				Render(strings.Join(m.loreTypingLines[:m.loreTypingIdx], "\n"))
+			combined := lipgloss.JoinHorizontal(lipgloss.Top, m.loreLogoBlock, typedBlock)
+			m.messages[m.loreBoxIdx] = aiBoxStyle.Width(m.width - 6).Render(
+				aiStyle.Render("Airi:") + "\n" + combined,
+			)
+			m.viewport.SetContent(strings.Join(m.messages, "\n"))
+			m.viewport.GotoBottom()
+
+			if m.loreTypingIdx < len(m.loreTypingLines) {
+				return m, tea.Tick(80*time.Millisecond, func(_ time.Time) tea.Msg {
+					return loreTickMsg{}
+				})
+			}
+			m.loreTyping = false
+			m.notification = "Lore loaded"
+			return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+				return clearNotificationMsg{}
+			})
 		}
 
 	case clearNotificationMsg:

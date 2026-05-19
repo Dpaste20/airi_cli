@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"golang.org/x/term"
 )
 
 const asciiArt = "" +
@@ -177,33 +176,18 @@ DESCRIPTION : "愛" (Ai) - Empathy, Affection
               Blending empathetic understanding with rational precision.
 ======================================================================`
 
-	termWidth, _, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil {
-		termWidth = 120
-	}
+	// Classic phosphor-green, like an old CRT terminal
+	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF41"))
 
-	logoWidth := lipgloss.Width(logoBlock)
-
-	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-
-	var finalLayout string
-
-	if termWidth > (logoWidth + lipgloss.Width(paragraphText) + 10) {
-
-		sideBySideStyle := textStyle.Copy().PaddingLeft(4).PaddingTop(4)
-		textBlock := sideBySideStyle.Render(paragraphText)
-
-		finalLayout = lipgloss.JoinHorizontal(lipgloss.Top, logoBlock, textBlock)
-	} else {
-
-		stackedStyle := textStyle.Copy().PaddingTop(2)
-		textBlock := stackedStyle.Render(paragraphText)
-
-		finalLayout = lipgloss.JoinVertical(lipgloss.Left, logoBlock, textBlock)
+	// Split paragraph into per-line strings for the typing animation
+	var typingLines []string
+	for _, line := range strings.Split(paragraphText, "\n") {
+		typingLines = append(typingLines, textStyle.Render(line))
 	}
 
 	return Result{
-		ViewportMessage: fmt.Sprintf("```\n%s\n```", finalLayout),
-		Notification:    "Lore loaded",
+		LogoBlock:    logoBlock,
+		TypingLines:  typingLines,
+		Notification: "Lore loaded",
 	}, true
 }
