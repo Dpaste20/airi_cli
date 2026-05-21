@@ -4,7 +4,7 @@ import os
 import requests
 import yaml
 
-CONFIG_PATH = "config.yaml"
+CONFIG_PATH = "tg.yaml"
 
 
 def send_telegram_message(chat_id: str, message: str) -> str:

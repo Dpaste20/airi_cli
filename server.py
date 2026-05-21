@@ -12,6 +12,7 @@ from typing import List, Optional
 
 import emoji
 import speech_recognition as sr
+import yaml
 from agno.agent import Agent
 from agno.db.json import JsonDb
 from agno.models.ollama import Ollama
@@ -38,6 +39,7 @@ from utils.CameraTools import (
     take_picture,
     take_timelapse,
 )
+from utils.CloneSelf import clone_self
 from utils.CronTools import add_cron_job, delete_cron_job, get_cron_jobs
 from utils.FetchUrls import fetch_urls
 from utils.FileModify import file_modify
@@ -170,6 +172,7 @@ TOOLS = [
     agent_device,
     adb_key_press,
     notion,
+    clone_self,
 ]
 
 storage_db: Optional[JsonDb] = None
@@ -238,26 +241,37 @@ def save_chat_log(
         print(f"Error saving chat log: {e}")
 
 
+import yaml
+
+
+def load_config(config_path="config.yaml"):
+
+    with open(config_path, "r") as file:
+        return yaml.safe_load(file)
+
+
 def get_agent(session_id: str) -> Agent:
     if not storage_db:
         raise ValueError("Database not initialized")
 
-    sys_msg = os.getenv("AGENT_SYSTEM_MESSAGE")
+    config = load_config()
+
+    model_id = config["agent"]["model"]["id"]
+    temperature = config["agent"]["model"]["temperature"]
+    sys_msg = config["agent"]["system_message"]
+    instructions = config["agent"]["instructions"]
+
     kb = get_knowledge_base()
 
     return Agent(
         session_id=session_id,
-        model=Ollama(id="gpt-oss:120b-cloud", options={"temperature": 0.3}),
+        model=Ollama(id=model_id, options={"temperature": temperature}),
         system_message=sys_msg,
         db=storage_db,
         knowledge=kb,
         tools=TOOLS,
         skills=Skills(loaders=[LocalSkills("./skills/agent-browser")]),
-        instructions=[
-            "You have access to specialized skills.",
-            "Use get_skill_instructions to load full guidance when needed.",
-            "CRITICAL: Before using create_event, get_upcoming_events, or add_task, YOU MUST ALWAYS call get_current_datetime to get the current date and time.",
-        ],
+        instructions=instructions,
         search_knowledge=True,
         add_history_to_context=True,
         num_history_runs=10,

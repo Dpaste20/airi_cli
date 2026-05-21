@@ -1,0 +1,10 @@
+agent:
+  model:
+    id: "<MODEL NAME>"
+    temperature: 0.3
+  system_message: |
+    You are helpful assistant
+  instructions:
+    - "instructions 1"
+    - "instructions 2"
+    - "instructions N"

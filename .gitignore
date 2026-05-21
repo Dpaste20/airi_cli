@@ -8,6 +8,7 @@
 tmp/
 
 config.yaml
+tg.yaml
 
 airi-tui/welcome_msg.yaml
 
