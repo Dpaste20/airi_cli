@@ -39,7 +39,6 @@ from utils.CameraTools import (
     take_picture,
     take_timelapse,
 )
-from utils.CloneSelf import clone_self
 from utils.CronTools import add_cron_job, delete_cron_job, get_cron_jobs
 from utils.FetchUrls import fetch_urls
 from utils.FileModify import file_modify
@@ -172,7 +171,6 @@ TOOLS = [
     agent_device,
     adb_key_press,
     notion,
-    clone_self,
 ]
 
 storage_db: Optional[JsonDb] = None
@@ -239,9 +237,6 @@ def save_chat_log(
             f.write("\n")
     except Exception as e:
         print(f"Error saving chat log: {e}")
-
-
-import yaml
 
 
 def load_config(config_path="config.yaml"):
