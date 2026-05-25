@@ -68,6 +68,11 @@ from utils.GoogleDriveTools import (
 from utils.GoogleTasksTools import add_task, complete_task, delete_task, list_tasks
 from utils.KillProcess import kill_processes
 from utils.LaunchGames import get_game_list, launch_game
+from utils.ManaNetwork import (
+    check_mana_agents_status,
+    interact_with_mana_network,
+    wake_mana_agent,
+)
 from utils.MapTools import get_directions, map_search
 from utils.NotionTools import notion
 from utils.OpenApplication import open_application
@@ -171,6 +176,9 @@ TOOLS = [
     agent_device,
     adb_key_press,
     notion,
+    check_mana_agents_status,
+    interact_with_mana_network,
+    wake_mana_agent,
 ]
 
 storage_db: Optional[JsonDb] = None
