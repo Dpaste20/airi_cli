@@ -12,7 +12,7 @@ from typing import List, Optional
 
 import emoji
 import speech_recognition as sr
-import yaml
+import tomllib
 from agno.agent import Agent
 from agno.db.json import JsonDb
 from agno.models.ollama import Ollama
@@ -247,34 +247,32 @@ def save_chat_log(
         print(f"Error saving chat log: {e}")
 
 
-def load_config(config_path="config.yaml"):
-
-    with open(config_path, "r") as file:
-        return yaml.safe_load(file)
+def load_config(config_path="config.toml"):
+    with open(config_path, "rb") as file:
+        return tomllib.load(file)
 
 
 def get_agent(session_id: str) -> Agent:
     if not storage_db:
         raise ValueError("Database not initialized")
 
-    config = load_config()
-
-    model_id = config["agent"]["model"]["id"]
-    temperature = config["agent"]["model"]["temperature"]
-    sys_msg = config["agent"]["system_message"]
-    instructions = config["agent"]["instructions"]
+    raw_config = load_config()
+    config = AppConfig(**raw_config)
 
     kb = get_knowledge_base()
 
     return Agent(
         session_id=session_id,
-        model=Ollama(id=model_id, options={"temperature": temperature}),
-        system_message=sys_msg,
+        model=Ollama(
+            id=config.agent.model.id,
+            options={"temperature": config.agent.model.temperature},
+        ),
+        system_message=config.agent.system_message,
         db=storage_db,
         knowledge=kb,
         tools=TOOLS,
-        skills=Skills(loaders=[LocalSkills("./skills/agent-browser")]),
-        instructions=instructions,
+        skills=Skills(loaders=[LocalSkills("./skills")]),
+        instructions=config.agent.instructions,
         search_knowledge=True,
         add_history_to_context=True,
         num_history_runs=10,
@@ -292,6 +290,21 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = "default_user"
     files: List[FileAttachment] = []
+
+
+class ModelConfig(BaseModel):
+    id: str
+    temperature: float = 0.3
+
+
+class AgentConfig(BaseModel):
+    model: ModelConfig
+    system_message: str
+    instructions: List[str]
+
+
+class AppConfig(BaseModel):
+    agent: AgentConfig
 
 
 class ChatResponse(BaseModel):

@@ -33,3 +33,4 @@ ascii_art.txt
 
 # Logs
 *.log
+config.toml
