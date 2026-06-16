@@ -133,7 +133,7 @@ def list_songs(max_results: int = 100) -> str:
 def play_song(song_name: str) -> str:
     """
     Plays a specific song from the AiriMusicFolder by name.
-    A partial name match is supported (e.g., 'bohemian' will match 'Bohemian Rhapsody.mp3').
+
 
     Args:
         song_name: The name (or partial name) of the song to play.
@@ -170,9 +170,10 @@ def play_song(song_name: str) -> str:
 
 
 @tool
-def play_playlist() -> str:
+def play_playlist(**kwargs) -> str:
     """
     Plays all songs in the AiriMusicFolder in alphabetical order.
+
 
     Returns:
         A status message confirming playback has started.
@@ -202,10 +203,11 @@ def play_playlist() -> str:
 
 
 @tool
-def play_random() -> str:
+def play_random(**kwargs) -> str:
     """
     Picks a random song from the AiriMusicFolder and plays it.
     Shuffles the full playlist so playback continues in random order.
+
 
     Returns:
         A status message showing which song is playing first.
@@ -234,10 +236,9 @@ def play_random() -> str:
 
 
 @tool
-def stop_music() -> str:
+def stop_music(**kwargs) -> str:
     """
     Stops music playback and clears the current playlist.
-
     Returns:
         A status message confirming playback has stopped.
     """
@@ -249,9 +250,10 @@ def stop_music() -> str:
 
 
 @tool
-def pause_music() -> str:
+def pause_music(**kwargs) -> str:
     """
     Pauses or resumes music playback (toggle).
+    Takes no parameters — accepts and ignores any stray arguments.
 
     Returns:
         A status message confirming the action.
@@ -264,9 +266,10 @@ def pause_music() -> str:
 
 
 @tool
-def next_song() -> str:
+def next_song(**kwargs) -> str:
     """
     Skips to the next song in the playlist.
+    Takes no parameters — accepts and ignores any stray arguments.
 
     Returns:
         A status message confirming the skip.
@@ -279,9 +282,10 @@ def next_song() -> str:
 
 
 @tool
-def previous_song() -> str:
+def previous_song(**kwargs) -> str:
     """
     Goes back to the previous song in the playlist.
+
 
     Returns:
         A status message confirming the action.

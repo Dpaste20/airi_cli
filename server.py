@@ -94,6 +94,7 @@ from utils.RestartSystem import restart_system
 from utils.RunDiagnosticTool import run_system_diagnostic
 from utils.ShellCommandRunner import bash
 from utils.Shutdown import shutdown_system
+from utils.SkillsTools import install_skill, list_skills
 from utils.SleepMode import sleep_mode_system
 from utils.SystemInfo import get_system_info
 from utils.TelegramTools import list_telegram_contacts, send_telegram_message
@@ -179,6 +180,8 @@ TOOLS = [
     check_mana_agents_status,
     interact_with_mana_network,
     wake_mana_agent,
+    list_skills,
+    install_skill,
 ]
 
 storage_db: Optional[JsonDb] = None

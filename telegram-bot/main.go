@@ -50,13 +50,13 @@ func main() {
 
 	bot, err := tgbotapi.NewBotAPI(cfg.TelegramToken)
 	if err != nil {
-		log.Fatalf("❌ Error initializing bot: %v", err)
+		log.Fatalf("Error initializing bot: %v", err)
 	}
 
 	bot.Debug = false
-	// log.Printf("🤖 Authorized on account %s", bot.Self.UserName)
-	// log.Printf("🔐 Master Access Restricted to User ID: %d", cfg.MasterUserID)
-	// log.Printf("🔗 Connected to Airi Backend at: %s", cfg.AiriAPIURL)
+	// log.Printf("Authorized on account %s", bot.Self.UserName)
+	// log.Printf("Master Access Restricted to User ID: %d", cfg.MasterUserID)
+	// log.Printf("Connected to Airi Backend at: %s", cfg.AiriAPIURL)
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
@@ -74,7 +74,7 @@ func main() {
 func loadConfig() Config {
 	token := os.Getenv("TELEGRAM_TOKEN")
 	if token == "" {
-		log.Fatal("❌ Error: TELEGRAM_TOKEN environment variable is not set.")
+		log.Fatal("Error: TELEGRAM_TOKEN environment variable is not set.")
 	}
 
 	apiUrl := os.Getenv("AIRI_API_URL")
@@ -84,12 +84,12 @@ func loadConfig() Config {
 
 	masterIDStr := os.Getenv("MASTER_USER_ID")
 	if masterIDStr == "" {
-		log.Fatal("❌ Error: MASTER_USER_ID is not set in .env file. Bot cannot start without an admin.")
+		log.Fatal("Error: MASTER_USER_ID is not set in .env file. Bot cannot start without an admin.")
 	}
 
 	masterID, err := strconv.ParseInt(masterIDStr, 10, 64)
 	if err != nil {
-		log.Fatalf("❌ Error: Invalid MASTER_USER_ID format in .env: %v", err)
+		log.Fatalf("Error: Invalid MASTER_USER_ID format in .env: %v", err)
 	}
 
 	return Config{
@@ -107,9 +107,9 @@ func handleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update, cfg Config) {
 	saveContactInfo(msg)
 
 	if msg.From.ID != cfg.MasterUserID {
-		log.Printf("⛔ Unauthorized access attempt from %s (ID: %d)", msg.From.FirstName, msg.From.ID)
+		log.Printf("Unauthorized access attempt from %s (ID: %d)", msg.From.FirstName, msg.From.ID)
 
-		reply(bot, chatID, "⛔ Access Denied: You are not authorized to interact with this bot.", msg.MessageID)
+		reply(bot, chatID, "Access Denied: You are not authorized to interact with this bot.", msg.MessageID)
 
 		return
 	}
@@ -134,12 +134,17 @@ func handleCommand(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, chatID int64, us
 	switch msg.Command() {
 	case "start":
 		responseText = fmt.Sprintf(
-			"Hello Boss %s! 👋\n\n"+
+			"Hello Boss %s!\n\n"+
 				"I am connected to Airi's Terminal\n\n"+
 				"Available Commands:\n"+
-				"🧠 /think - Enable thinking mode\n"+
-				"⚡ /fast - Disable thinking mode\n"+
-				"ℹ️ /help - Show capabilities",
+				"/think - Enable thinking mode\n"+
+				"/fast - Disable thinking mode\n"+
+				"/help - Show capabilities\n"+
+				"/agent_browser - use agent-browser\n"+
+				"/agent_device - run mobile device\n"+
+				"/diagnosis - Run system diagnosis\n"+
+				"/sleep - Put agent to sleep\n"+
+				"/sysinfo - Display system information",
 			msg.From.FirstName,
 		)
 	case "help":
@@ -151,6 +156,21 @@ func handleCommand(bot *tgbotapi.BotAPI, msg *tgbotapi.Message, chatID int64, us
 	case "fast":
 		sendBackendRequest = true
 		backendCommand = "/set no_think"
+	case "agent_browser":
+		sendBackendRequest = true
+		backendCommand = "/agent_browser"
+	case "agent_device":
+		sendBackendRequest = true
+		backendCommand = "/agent_device"
+	case "diagnosis":
+		sendBackendRequest = true
+		backendCommand = "/diagnosis"
+	case "sleep":
+		sendBackendRequest = true
+		backendCommand = "/sleep"
+	case "sysinfo":
+		sendBackendRequest = true
+		backendCommand = "/sysinfo"
 	default:
 		responseText = "Unknown command. Try /help."
 	}
@@ -172,25 +192,25 @@ func sendToAiri(message, sessionID, apiURL string) string {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("Error marshalling JSON: %v", err)
-		return "❌ Error preparing request."
+		return "Error preparing request."
 	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		log.Printf("Error connecting to Airi: %v", err)
-		return "❌ Error: Could not connect to Airi server. Is main.py running?"
+		return "Error: Could not connect to Airi server. Is main.py running?"
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Sprintf("❌ API Error: %d", resp.StatusCode)
+		return fmt.Sprintf("API Error: %d", resp.StatusCode)
 	}
 
 	var airiResp AiriResponse
 	if err := json.NewDecoder(resp.Body).Decode(&airiResp); err != nil {
 		log.Printf("Error decoding response: %v", err)
-		return "❌ Error processing response."
+		return "Error processing response."
 	}
 
 	return airiResp.Response
@@ -257,7 +277,7 @@ func saveContactInfo(msg *tgbotapi.Message) {
 		if err != nil {
 			log.Printf("Error writing contact file: %v", err)
 		} else {
-			log.Printf("📝 New contact saved: %s", msg.From.FirstName)
+			log.Printf("New contact saved: %s", msg.From.FirstName)
 		}
 	}
 }
