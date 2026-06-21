@@ -41,24 +41,28 @@ const airiLogo = `
 `
 
 var (
-	senderStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
-	aiStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
-	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	infoStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
-	commandStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	recordingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Blink(true)
+	senderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
+	aiStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)
+	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
+	commandStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+
+	recordingStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			Background(lipgloss.Color("236")).
+			Bold(true).
+			Blink(true)
 
 	userBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("5")).
-			Padding(0, 1).
-			Margin(0, 0)
+			Border(lipgloss.ThickBorder(), false, false, false, true).
+			BorderForeground(lipgloss.Color("39")).
+			Background(lipgloss.Color("236")).
+			Padding(1, 2).
+			Margin(1, 0, 0, 0)
 
 	aiBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("2")).
-			Padding(0, 1).
-			Margin(0, 0)
+			Padding(0, 3).
+			Margin(0, 0, 1, 0)
 
 	helpBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -72,23 +76,27 @@ var (
 			Underline(true)
 
 	statusBarStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("230")).
-			Background(lipgloss.Color("236")).
-			Padding(0, 1)
+			Background(lipgloss.Color("236"))
 
 	statusConnectedStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("42")).
+				Foreground(lipgloss.Color("43")).
+				Background(lipgloss.Color("237")).
+				Padding(0, 1).
 				Bold(true)
 
 	statusDisconnectedStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("196")).
+				Background(lipgloss.Color("52")).
+				Padding(0, 1).
 				Bold(true)
 
 	statusLabelStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("240"))
+				Foreground(lipgloss.Color("243")).
+				Background(lipgloss.Color("236"))
 
 	statusValueStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("255")).
+				Background(lipgloss.Color("236")).
 				Bold(true)
 
 	notificationStyle = lipgloss.NewStyle().
@@ -97,20 +105,23 @@ var (
 				Bold(true).
 				Padding(0, 2)
 
-	acItemStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252")).
-			Background(lipgloss.Color("235")).
-			Padding(0, 2)
+	acNameStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("255")).
+			Background(lipgloss.Color("236")).
+			Bold(true)
 
-	acSelectedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("0")).
-			Background(lipgloss.Color("63")).
-			Bold(true).
-			Padding(0, 2)
+	acDescStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("243")).
+			Background(lipgloss.Color("236"))
 
-	acBorderStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("63"))
+	acSelectedRowStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("0")).
+				Background(lipgloss.Color("14")).
+				Bold(true)
+
+	acSelectedDescStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("0")).
+				Background(lipgloss.Color("215"))
 
 	fileBadgeStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("0")).
@@ -120,6 +131,7 @@ var (
 
 	fileBarStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("214")).
+			Background(lipgloss.Color("236")).
 			Padding(0, 1)
 
 	fpOverlayStyle = lipgloss.NewStyle().
@@ -154,11 +166,25 @@ var (
 			Italic(true)
 )
 
-func loadKnownCommands() []string {
-	defaultCommands := []string{
-		"/help", "/attach", "/detach", "/save-session",
-		"/resume-session", "/list-sessions", "/tools-list",
+type CommandInfo struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+}
+
+func defaultKnownCommands() []CommandInfo {
+	return []CommandInfo{
+		{"/help", "Show this screen"},
+		{"/attach", "Attach a .txt or .pdf file to next message"},
+		{"/detach", "Remove all staged attachments"},
+		{"/save-session", "Save current conversation"},
+		{"/resume-session", "Restore a saved conversation"},
+		{"/list-sessions", "List all saved sessions"},
+		{"/tools-list", "Show all available agent tools"},
 	}
+}
+
+func loadKnownCommands() []CommandInfo {
+	defaultCommands := defaultKnownCommands()
 
 	data, err := os.ReadFile("knownCommands.yaml")
 	if err != nil {
@@ -166,32 +192,52 @@ func loadKnownCommands() []string {
 		return defaultCommands
 	}
 
-	var config struct {
+	var structured struct {
+		Commands []CommandInfo `yaml:"commands"`
+	}
+
+	if err := yaml.Unmarshal(data, &structured); err == nil && len(structured.Commands) > 0 {
+		var cleaned []CommandInfo
+		for _, c := range structured.Commands {
+			if strings.TrimSpace(c.Name) != "" {
+				cleaned = append(cleaned, c)
+			}
+		}
+		if len(cleaned) > 0 {
+			return cleaned
+		}
+	}
+
+	var legacy struct {
 		Commands []string `yaml:"commands"`
 	}
 
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	if err := yaml.Unmarshal(data, &legacy); err != nil {
 		log.Printf("Warning: Failed to parse knownCommands.yaml: %v", err)
 		return defaultCommands
 	}
 
-	if len(config.Commands) == 0 {
+	if len(legacy.Commands) == 0 {
 		return defaultCommands
 	}
 
-	return config.Commands
+	var converted []CommandInfo
+	for _, name := range legacy.Commands {
+		converted = append(converted, CommandInfo{Name: name})
+	}
+	return converted
 }
 
 var knownCommands = loadKnownCommands()
 
-func getMatches(input string) []string {
+func getMatches(input string) []CommandInfo {
 	if !strings.HasPrefix(input, "/") || input == "" {
 		return nil
 	}
 	lower := strings.ToLower(input)
-	var matches []string
+	var matches []CommandInfo
 	for _, cmd := range knownCommands {
-		if strings.HasPrefix(cmd, lower) && cmd != lower {
+		if strings.HasPrefix(cmd.Name, lower) && cmd.Name != lower {
 			matches = append(matches, cmd)
 		}
 	}
@@ -270,7 +316,7 @@ type model struct {
 	lastAiResponse     string
 	notification       string
 	showHelp           bool
-	suggestions        []string
+	suggestions        []CommandInfo
 	suggestionIdx      int
 	attachedFiles      []AttachedFile
 
@@ -279,12 +325,45 @@ type model struct {
 	fpItems        []fpItem
 	fpIdx          int
 
-	// lore typing animation
 	loreTyping      bool
 	loreLogoBlock   string
 	loreTypingLines []string
 	loreTypingIdx   int
 	loreBoxIdx      int
+}
+
+const maxSuggestionRows = 8
+
+func visibleSuggestionCount(n int) int {
+	if n > maxSuggestionRows {
+		return maxSuggestionRows
+	}
+	return n
+}
+
+func (m model) syncLayout() model {
+	if m.height == 0 {
+		return m
+	}
+
+	offset := 7
+	if len(m.attachedFiles) > 0 {
+		offset += 2
+	}
+	if len(m.suggestions) > 0 {
+		offset += visibleSuggestionCount(len(m.suggestions)) + 1
+	}
+
+	newHeight := m.height - offset
+	if newHeight < 1 {
+		newHeight = 1
+	}
+
+	if m.viewport.Height != newHeight {
+		m.viewport.Height = newHeight
+		m.viewport.GotoBottom()
+	}
+	return m
 }
 
 func mimeFromExt(path string) (string, bool) {
@@ -491,7 +570,6 @@ func loadWelcomeMessages() []string {
 
 	data, err := os.ReadFile("welcome_msg.yaml")
 	if err != nil {
-
 		return defaultMessages
 	}
 
@@ -500,7 +578,6 @@ func loadWelcomeMessages() []string {
 	}
 
 	if err := yaml.Unmarshal(data, &config); err != nil {
-
 		log.Printf("Warning: Failed to parse welcome_msg.yaml: %v", err)
 		return defaultMessages
 	}
@@ -515,9 +592,15 @@ func loadWelcomeMessages() []string {
 func initialModel(conn *websocket.Conn) model {
 	ti := textinput.New()
 	ti.Placeholder = "Ask Airi something... (type /help for commands)"
+	ti.Prompt = ""
 	ti.Focus()
 	ti.CharLimit = 1000
 	ti.Width = 20
+
+	boxBg := lipgloss.Color("236")
+	ti.TextStyle = lipgloss.NewStyle().Background(boxBg)
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Background(boxBg)
+	ti.Cursor.Style = lipgloss.NewStyle().Background(boxBg).Foreground(lipgloss.Color("255"))
 
 	defaultWidth := 80
 	vp := viewport.New(defaultWidth, 20)
@@ -530,9 +613,7 @@ func initialModel(conn *websocket.Conn) model {
 	welcomeMsg := infoStyle.Render("\n" + selectedWelcome + "\n")
 	go func() {
 		time.Sleep(1 * time.Second)
-
 		spokenText := ", , , " + selectedWelcome
-
 		_ = exec.Command("spd-say", spokenText).Run()
 	}()
 
@@ -586,6 +667,7 @@ func (m model) Init() tea.Cmd {
 		waitForIncomingMessage(m.conn),
 	)
 }
+
 func preprocessMarkdown(text string) string {
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
@@ -610,7 +692,7 @@ func (m model) renderMarkdown(text string) string {
 func (m model) renderStatusBar() string {
 	if m.notification != "" {
 		msg := notificationStyle.Render(m.notification)
-		return statusBarStyle.Width(m.width).Render(lipgloss.PlaceHorizontal(m.width, lipgloss.Center, msg))
+		return statusBarStyle.Render(msg)
 	}
 
 	var connStatus string
@@ -629,43 +711,31 @@ func (m model) renderStatusBar() string {
 		recStatus = statusLabelStyle.Render("Space to Talk")
 	}
 
-	msgCount := fmt.Sprintf("%s %s",
-		statusLabelStyle.Render("Messages:"),
-		statusValueStyle.Render(fmt.Sprintf("%d", m.messageCount)))
+	msgCount := statusLabelStyle.Render("Messages: ") + statusValueStyle.Render(fmt.Sprintf("%d", m.messageCount))
+	sessionInfo := statusLabelStyle.Render("Session: ") + statusValueStyle.Render(m.sessionID)
+	genTokens := statusLabelStyle.Render("Tokens: ") + statusValueStyle.Render(fmt.Sprintf("%d", m.generatedTokens))
+	genTime := statusLabelStyle.Render("Time: ") + statusValueStyle.Render(fmt.Sprintf("%.2fs", m.generationTime.Seconds()))
+	genSpeed := statusLabelStyle.Render("Speed: ") + statusValueStyle.Render(fmt.Sprintf("%.2f t/s", m.tokensPerSecond))
 
-	sessionInfo := fmt.Sprintf("%s %s",
-		statusLabelStyle.Render("Session:"),
-		statusValueStyle.Render(m.sessionID))
-
-	genTokens := fmt.Sprintf("%s %s",
-		statusLabelStyle.Render("Tokens:"),
-		statusValueStyle.Render(fmt.Sprintf("%d", m.generatedTokens)))
-
-	genTime := fmt.Sprintf("%s %s",
-		statusLabelStyle.Render("Time:"),
-		statusValueStyle.Render(fmt.Sprintf("%.2fs", m.generationTime.Seconds())))
-
-	genSpeed := fmt.Sprintf("%s %s",
-		statusLabelStyle.Render("Speed:"),
-		statusValueStyle.Render(fmt.Sprintf("%.2f t/s", m.tokensPerSecond)))
+	spacer := lipgloss.NewStyle().Background(lipgloss.Color("236")).Render("  ")
 
 	statusContent := lipgloss.JoinHorizontal(lipgloss.Left,
 		connStatus,
-		"  ",
+		spacer,
 		recStatus,
-		"  ",
+		spacer,
 		msgCount,
-		"  ",
+		spacer,
 		sessionInfo,
-		"  ",
+		spacer,
 		genTokens,
-		"  ",
+		spacer,
 		genTime,
-		"  ",
+		spacer,
 		genSpeed,
 	)
 
-	return statusBarStyle.Width(m.width).Render(statusContent)
+	return statusBarStyle.Render(statusContent)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -763,6 +833,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					sizeStr = fmt.Sprintf("%.1f MB", float64(af.Size)/1024/1024)
 				}
 				m.notification = fmt.Sprintf("📎 %s (%s) attached", af.Name, sizeStr)
+				m = m.syncLayout()
 				return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
 					return clearNotificationMsg{}
 				})
@@ -807,6 +878,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.attachedFiles) > 0 {
 				m.attachedFiles = nil
 				m.notification = "✓ Attachments cleared"
+				m = m.syncLayout()
 				return m, tea.Tick(time.Millisecond*800, func(_ time.Time) tea.Msg {
 					return clearNotificationMsg{}
 				})
@@ -842,10 +914,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if idx < 0 {
 					idx = 0
 				}
-				m.textInput.SetValue(m.suggestions[idx])
+				m.textInput.SetValue(m.suggestions[idx].Name)
 				m.textInput.CursorEnd()
 				m.suggestions = nil
 				m.suggestionIdx = -1
+				m = m.syncLayout()
 			}
 			return m, nil
 
@@ -871,6 +944,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.suggestions) > 0 {
 				m.suggestions = nil
 				m.suggestionIdx = -1
+				m = m.syncLayout()
 				return m, nil
 			}
 			if m.isRecording && m.recordCmd != nil {
@@ -944,11 +1018,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyEnter:
 
-			if len(m.suggestions) > 0 && m.suggestionIdx >= 0 {
-				m.textInput.SetValue(m.suggestions[m.suggestionIdx])
+			if len(m.suggestions) > 0 {
+				idx := m.suggestionIdx
+				if idx < 0 {
+					idx = 0
+				}
+				m.textInput.SetValue(m.suggestions[idx].Name)
 				m.textInput.CursorEnd()
 				m.suggestions = nil
 				m.suggestionIdx = -1
+				m = m.syncLayout()
 				return m, nil
 			}
 			m.suggestions = nil
@@ -969,33 +1048,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textInput.SetValue("")
 				rawPath := strings.TrimSpace(strings.TrimPrefix(input, "/attach"))
 
-				cmdLabel := commandStyle.Render("You:")
-				cmdDisplay := userBoxStyle.Width(m.width - 6).Render(
-					fmt.Sprintf("%s %s", cmdLabel, input),
-				)
+				cmdDisplay := userBoxStyle.Width(m.width).Render(input)
 				m.messages = append(m.messages, cmdDisplay)
 				m.messageCount++
 
 				if rawPath == "" {
 					msg := "Usage: `/attach <path>`  —  supported: `.txt`, `.pdf`"
 					m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
-						aiStyle.Render("Airi:")+"\n"+m.renderMarkdown(msg),
+						m.renderMarkdown(msg),
 					))
 					m.messageCount++
 					m.viewport.SetContent(strings.Join(m.messages, "\n"))
 					m.viewport.GotoBottom()
+					m = m.syncLayout()
 					return m, nil
 				}
 
 				af, err := loadAttachedFile(rawPath)
 				if err != nil {
 					errBox := aiBoxStyle.BorderForeground(lipgloss.Color("9")).Width(m.width - 6).Render(
-						aiStyle.Render("Airi:") + "\n" + errStyle.Render("❌ "+err.Error()),
+						errStyle.Render("❌ " + err.Error()),
 					)
 					m.messages = append(m.messages, errBox)
 					m.messageCount++
 					m.viewport.SetContent(strings.Join(m.messages, "\n"))
 					m.viewport.GotoBottom()
+					m = m.syncLayout()
 					return m, nil
 				}
 
@@ -1016,45 +1094,42 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				okMsg := fmt.Sprintf("📎 Attached **%s** (%s)  —  will be sent with your next message.", af.Name, sizeStr)
 				m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
-					aiStyle.Render("Airi:")+"\n"+m.renderMarkdown(okMsg),
+					m.renderMarkdown(okMsg),
 				))
 				m.messageCount++
 				m.viewport.SetContent(strings.Join(m.messages, "\n"))
 				m.viewport.GotoBottom()
+				m = m.syncLayout()
 				return m, nil
 			}
 
 			if input == "/detach" {
 				m.textInput.SetValue("")
-				cmdDisplay := userBoxStyle.Width(m.width - 6).Render(
-					fmt.Sprintf("%s %s", commandStyle.Render("You:"), input),
-				)
+				cmdDisplay := userBoxStyle.Width(m.width).Render(input)
 				m.messages = append(m.messages, cmdDisplay)
 				m.messageCount++
 
 				if len(m.attachedFiles) == 0 {
 					m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
-						aiStyle.Render("Airi:")+"\n"+infoStyle.Render("No files are currently attached."),
+						infoStyle.Render("No files are currently attached."),
 					))
 				} else {
 					m.attachedFiles = nil
 					m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
-						aiStyle.Render("Airi:")+"\n"+m.renderMarkdown("🗑 All attachments cleared."),
+						m.renderMarkdown("🗑 All attachments cleared."),
 					))
 				}
 				m.messageCount++
 				m.viewport.SetContent(strings.Join(m.messages, "\n"))
 				m.viewport.GotoBottom()
+				m = m.syncLayout()
 				return m, nil
 			}
 
 			if result, handled := commands.Dispatch(input, m.sessionID, m.messages); handled {
 				m.textInput.SetValue("")
 
-				cmdLabel := commandStyle.Render("You:")
-				cmdDisplay := userBoxStyle.Width(m.width - 6).Render(
-					fmt.Sprintf("%s %s", cmdLabel, input),
-				)
+				cmdDisplay := userBoxStyle.Width(m.width).Render(input)
 				m.messages = append(m.messages, cmdDisplay)
 				m.messageCount++
 
@@ -1064,9 +1139,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if result.IsError {
 						style = aiBoxStyle.BorderForeground(lipgloss.Color("9"))
 					}
-					responseBox := style.Width(m.width - 6).Render(
-						aiStyle.Render("Airi:") + "\n" + rendered,
-					)
+					responseBox := style.Width(m.width - 6).Render(rendered)
 					m.messages = append(m.messages, responseBox)
 					m.messageCount++
 				}
@@ -1077,7 +1150,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.loreTypingLines = result.TypingLines
 					m.loreTypingIdx = 0
 					m.loreTyping = true
-					// Reserve a slot for the animated side-by-side box
+
 					m.messages = append(m.messages, "")
 					m.loreBoxIdx = len(m.messages) - 1
 					m.messageCount++
@@ -1117,7 +1190,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.isSpeaking = false
 			}
 
-			label := senderStyle.Render("You:")
 			userBubbleText := input
 			if len(m.attachedFiles) > 0 {
 				var names []string
@@ -1126,9 +1198,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				userBubbleText += "\n" + infoStyle.Render(strings.Join(names, "  "))
 			}
-			displayInput := userBoxStyle.Width(m.width - 6).Render(
-				fmt.Sprintf("%s %s", label, userBubbleText),
-			)
+
+			displayInput := userBoxStyle.Width(m.width).Render(userBubbleText)
 
 			m.messages = append(m.messages, displayInput)
 			m.messageCount++
@@ -1159,8 +1230,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tokensPerSecond = 0.0
 
 			content := strings.Join(m.messages, "\n")
-			header := aiStyle.Render("Airi:")
-			content += "\n" + header + " " + m.spinner.View()
+			content += "\n" + m.spinner.View()
 
 			m.viewport.SetContent(content)
 			m.viewport.GotoBottom()
@@ -1192,6 +1262,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			m.textInput.SetValue("")
+			m = m.syncLayout()
 			return m, tea.Batch(sendCmd, m.spinner.Tick)
 		}
 
@@ -1201,9 +1272,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			typedBlock := lipgloss.NewStyle().PaddingLeft(4).PaddingTop(2).
 				Render(strings.Join(m.loreTypingLines[:m.loreTypingIdx], "\n"))
 			combined := lipgloss.JoinHorizontal(lipgloss.Top, m.loreLogoBlock, typedBlock)
-			m.messages[m.loreBoxIdx] = aiBoxStyle.Width(m.width - 6).Render(
-				aiStyle.Render("Airi:") + "\n" + combined,
-			)
+			m.messages[m.loreBoxIdx] = aiBoxStyle.Width(m.width - 6).Render(combined)
 			m.viewport.SetContent(strings.Join(m.messages, "\n"))
 			m.viewport.GotoBottom()
 
@@ -1227,8 +1296,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 		m.viewport.Width = msg.Width
-		m.viewport.Height = msg.Height - 5
-		m.textInput.Width = msg.Width
+		m.textInput.Width = msg.Width - 6
 
 		coloredLogo := aiStyle.Render(airiLogo)
 		centeredLogo := lipgloss.PlaceHorizontal(msg.Width, lipgloss.Center, coloredLogo)
@@ -1245,15 +1313,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		content := strings.Join(m.messages, "\n")
 		if m.currentAiChunk != "" {
 			renderedChunk := m.renderMarkdown(m.currentAiChunk)
-
-			fullContent := aiStyle.Render("Airi:") + "\n" + renderedChunk
-			boxedContent := aiBoxStyle.Width(m.width - 6).Render(fullContent)
+			boxedContent := aiBoxStyle.Width(m.width - 6).Render(renderedChunk)
 			content += "\n" + boxedContent
 		} else if m.isLoading {
-			header := aiStyle.Render("Airi:")
-			content += "\n" + header + " " + m.spinner.View()
+			content += "\n" + m.spinner.View()
 		}
 		m.viewport.SetContent(content)
+
+		m = m.syncLayout()
 
 	case spinner.TickMsg:
 		if m.isLoading {
@@ -1262,8 +1329,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if m.currentAiChunk == "" {
 				content := strings.Join(m.messages, "\n")
-				header := aiStyle.Render("Airi:")
-				content += "\n" + header + " " + m.spinner.View()
+				content += "\n" + m.spinner.View()
 				m.viewport.SetContent(content)
 				m.viewport.GotoBottom()
 			}
@@ -1289,8 +1355,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				voiceText := strings.TrimPrefix(msg.Content, "🎤 *Voice:* ")
 				voiceText = strings.TrimSpace(voiceText)
 
-				formattedVoice := fmt.Sprintf("%s %s", senderStyle.Render("You:"), voiceText)
-				displayInput := userBoxStyle.Width(m.width - 6).Render(formattedVoice)
+				displayInput := userBoxStyle.Width(m.width).Render(voiceText)
 
 				m.messages = append(m.messages, displayInput)
 				m.messageCount++
@@ -1298,8 +1363,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.awaitingVoiceChunk = false
 
 				content := strings.Join(m.messages, "\n")
-				header := aiStyle.Render("Airi:")
-				content += "\n" + header + " " + m.spinner.View()
+				content += "\n" + m.spinner.View()
 				m.viewport.SetContent(content)
 				m.viewport.GotoBottom()
 			} else {
@@ -1313,9 +1377,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				renderedContent := m.renderMarkdown(m.currentAiChunk)
-
-				fullContent := aiStyle.Render("Airi:") + "\n" + renderedContent
-				boxedContent := aiBoxStyle.Width(m.width - 6).Render(fullContent)
+				boxedContent := aiBoxStyle.Width(m.width - 6).Render(renderedContent)
 
 				displayMessages := append([]string{}, m.messages...)
 				displayMessages = append(displayMessages, boxedContent)
@@ -1344,9 +1406,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastAiResponse = m.currentAiChunk
 
 			renderedContent := m.renderMarkdown(m.currentAiChunk)
-
-			fullContent := aiStyle.Render("Airi:") + "\n" + renderedContent
-			boxedContent := aiBoxStyle.Width(m.width - 6).Render(fullContent)
+			boxedContent := aiBoxStyle.Width(m.width - 6).Render(renderedContent)
 
 			m.messages = append(m.messages, boxedContent)
 			m.messageCount++
@@ -1395,6 +1455,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m.suggestions = newMatches
 
+	m = m.syncLayout()
+
 	return m, tea.Batch(tiCmd, vpCmd)
 }
 
@@ -1411,7 +1473,7 @@ func (m model) renderFileBar() string {
 		badges = append(badges, fileBadgeStyle.Render(icon+" "+af.Name))
 	}
 	hint := fileBarStyle.Render("ctrl+d to clear")
-	return strings.Join(badges, " ") + "  " + hint + "\n"
+	return strings.Join(badges, " ") + "  " + hint
 }
 
 func (m model) View() string {
@@ -1462,28 +1524,78 @@ func (m model) View() string {
 		)
 	}
 
-	dropdownBlock := ""
+	statusBar := m.renderStatusBar()
+	innerContent := statusBar
+
 	if len(m.suggestions) > 0 {
-		var rows []string
-		for i, cmd := range m.suggestions {
-			if i == m.suggestionIdx {
-				rows = append(rows, acSelectedStyle.Render(cmd))
-			} else {
-				rows = append(rows, acItemStyle.Render(cmd))
+		rowWidth := m.width - 6
+		if rowWidth < 10 {
+			rowWidth = 10
+		}
+
+		total := len(m.suggestions)
+		visibleCount := visibleSuggestionCount(total)
+
+		selected := m.suggestionIdx
+		if selected < 0 {
+			selected = 0
+		}
+
+		windowStart := 0
+		if total > visibleCount {
+			windowStart = selected - visibleCount + 1
+			if windowStart < 0 {
+				windowStart = 0
+			}
+			if windowStart > total-visibleCount {
+				windowStart = total - visibleCount
 			}
 		}
-		inner := strings.Join(rows, "\n")
-		dropdownBlock = acBorderStyle.Render(inner) + "\n"
+		visible := m.suggestions[windowStart : windowStart+visibleCount]
+		selectedInWindow := selected - windowStart
+
+		nameWidth := 0
+		for _, s := range visible {
+			if l := len(s.Name); l > nameWidth {
+				nameWidth = l
+			}
+		}
+		nameWidth += 3
+
+		var rows []string
+		for i, cmd := range visible {
+			name := cmd.Name
+			pad := nameWidth - len(name)
+			if pad < 1 {
+				pad = 1
+			}
+			line := "  " + name + strings.Repeat(" ", pad) + cmd.Description
+
+			if i == selectedInWindow {
+				rows = append(rows, acSelectedRowStyle.Width(rowWidth).Render(line))
+			} else {
+				row := acNameStyle.Render("  "+name+strings.Repeat(" ", pad)) + acDescStyle.Render(cmd.Description)
+				rows = append(rows, acNameStyle.Width(rowWidth).Render(row))
+			}
+		}
+
+		innerContent += "\n\n" + strings.Join(rows, "\n")
 	}
 
+	innerContent += "\n\n" + m.textInput.View()
+
+	fileBar := m.renderFileBar()
+	if fileBar != "" {
+		innerContent += "\n\n" + strings.TrimSpace(fileBar)
+	}
+
+	inputBox := userBoxStyle.Width(m.width).Render(innerContent)
+
 	return fmt.Sprintf(
-		"%s\n%s\n%s%s%s",
+		"%s\n%s",
 		m.viewport.View(),
-		m.renderStatusBar(),
-		dropdownBlock,
-		m.renderFileBar(),
-		m.textInput.View(),
-	) + "\n"
+		inputBox,
+	)
 }
 
 func waitForIncomingMessage(conn *websocket.Conn) tea.Cmd {
