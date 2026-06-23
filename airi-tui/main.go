@@ -288,12 +288,14 @@ type fpItem struct {
 	Size     int64
 }
 
+type MessageRenderFunc func(m model) string
+
 type model struct {
 	conn               *websocket.Conn
 	viewport           viewport.Model
 	textInput          textinput.Model
 	renderer           *glamour.TermRenderer
-	messages           []string
+	messages           []MessageRenderFunc
 	currentAiChunk     string
 	err                error
 	spinner            spinner.Model
@@ -330,6 +332,83 @@ type model struct {
 	loreTypingLines []string
 	loreTypingIdx   int
 	loreBoxIdx      int
+}
+
+func createAiMessageFunc(text string) MessageRenderFunc {
+	var cacheWidth int
+	var cacheRes string
+	return func(m model) string {
+		if m.width == cacheWidth && cacheRes != "" {
+			return cacheRes
+		}
+		cacheWidth = m.width
+		cacheRes = aiBoxStyle.Width(m.width - 6).MaxWidth(m.width - 6).Render(m.renderMarkdown(text))
+		return cacheRes
+	}
+}
+
+func createUserMessageFunc(text string) MessageRenderFunc {
+	var cacheWidth int
+	var cacheRes string
+	return func(m model) string {
+		if m.width == cacheWidth && cacheRes != "" {
+			return cacheRes
+		}
+		cacheWidth = m.width
+		cacheRes = userBoxStyle.Width(m.width).MaxWidth(m.width).Render(text)
+		return cacheRes
+	}
+}
+
+func createSystemMessageFunc(text string) MessageRenderFunc {
+	var cacheWidth int
+	var cacheRes string
+	return func(m model) string {
+		if m.width == cacheWidth && cacheRes != "" {
+			return cacheRes
+		}
+		cacheWidth = m.width
+		cacheRes = infoStyle.Render(text)
+		return cacheRes
+	}
+}
+
+func createErrorMessageFunc(text string) MessageRenderFunc {
+	var cacheWidth int
+	var cacheRes string
+	return func(m model) string {
+		if m.width == cacheWidth && cacheRes != "" {
+			return cacheRes
+		}
+		cacheWidth = m.width
+		cacheRes = aiBoxStyle.BorderForeground(lipgloss.Color("9")).Width(m.width - 6).MaxWidth(m.width - 6).Render(errStyle.Render(text))
+		return cacheRes
+	}
+}
+
+func (m model) updateViewportContent() model {
+	var lines []string
+	for _, fn := range m.messages {
+		lines = append(lines, fn(m))
+	}
+	content := strings.Join(lines, "\n")
+	if m.currentAiChunk != "" {
+		renderedChunk := m.renderMarkdown(m.currentAiChunk)
+		boxedContent := aiBoxStyle.Width(m.width - 6).MaxWidth(m.width - 6).Render(renderedChunk)
+		content += "\n" + boxedContent
+	} else if m.isLoading {
+		content += "\n" + m.spinner.View()
+	}
+	m.viewport.SetContent(content)
+	return m
+}
+
+func (m model) getRenderedMessages() []string {
+	var res []string
+	for _, fn := range m.messages {
+		res = append(res, fn(m))
+	}
+	return res
 }
 
 const maxSuggestionRows = 8
@@ -548,7 +627,7 @@ func (m model) renderFilePicker() string {
 		hints,
 	)
 
-	box := fpOverlayStyle.Width(innerWidth).Render(body)
+	box := fpOverlayStyle.Width(innerWidth).MaxWidth(innerWidth).Render(body)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
@@ -605,19 +684,13 @@ func initialModel(conn *websocket.Conn) model {
 	defaultWidth := 80
 	vp := viewport.New(defaultWidth, 20)
 
-	coloredLogo := aiStyle.Render(airiLogo)
-	logoDisplay := lipgloss.PlaceHorizontal(defaultWidth, lipgloss.Center, coloredLogo)
-
 	welcomeMessages := loadWelcomeMessages()
 	selectedWelcome := welcomeMessages[rand.Intn(len(welcomeMessages))]
-	welcomeMsg := infoStyle.Render("\n" + selectedWelcome + "\n")
 	go func() {
 		time.Sleep(1 * time.Second)
 		spokenText := ", , , " + selectedWelcome
 		_ = exec.Command("spd-say", spokenText).Run()
 	}()
-
-	vp.SetContent(logoDisplay + "\n" + welcomeMsg)
 
 	renderer, _ := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
@@ -627,12 +700,18 @@ func initialModel(conn *websocket.Conn) model {
 	s.Spinner = spinner.MiniDot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("cyan"))
 
-	return model{
-		conn:               conn,
-		textInput:          ti,
-		viewport:           vp,
-		renderer:           renderer,
-		messages:           []string{logoDisplay, welcomeMsg},
+	m := model{
+		conn:      conn,
+		textInput: ti,
+		viewport:  vp,
+		renderer:  renderer,
+		messages: []MessageRenderFunc{
+			func(m model) string {
+				coloredLogo := aiStyle.Render(airiLogo)
+				return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, coloredLogo)
+			},
+			createSystemMessageFunc("\n" + selectedWelcome + "\n"),
+		},
 		spinner:            s,
 		isLoading:          false,
 		sessionID:          newSessionID(),
@@ -659,6 +738,9 @@ func initialModel(conn *websocket.Conn) model {
 		fpItems:            nil,
 		fpIdx:              0,
 	}
+
+	m = m.updateViewportContent()
+	return m
 }
 
 func (m model) Init() tea.Cmd {
@@ -735,7 +817,12 @@ func (m model) renderStatusBar() string {
 		genSpeed,
 	)
 
-	return statusBarStyle.Render(statusContent)
+	maxWidth := m.width - 6
+	if maxWidth < 1 {
+		maxWidth = 1
+	}
+
+	return statusBarStyle.MaxWidth(maxWidth).Render(statusContent)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -965,7 +1052,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					audioBytes, err := os.ReadFile("/tmp/airi_voice.wav")
 					if err != nil {
-						m.messages = append(m.messages, errStyle.Render("Error reading audio: "+err.Error()))
+						m.messages = append(m.messages, createErrorMessageFunc("Error reading audio: "+err.Error()))
+						m = m.updateViewportContent()
+						m.viewport.GotoBottom()
 						return m, nil
 					}
 
@@ -1009,7 +1098,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.isRecording = true
 				m.recordCmd = exec.Command("arecord", "-f", "cd", "/tmp/airi_voice.wav")
 				if err := m.recordCmd.Start(); err != nil {
-					m.messages = append(m.messages, errStyle.Render("Error starting recording: "+err.Error()))
+					m.messages = append(m.messages, createErrorMessageFunc("Error starting recording: "+err.Error()))
+					m = m.updateViewportContent()
+					m.viewport.GotoBottom()
 					m.isRecording = false
 					return m, nil
 				}
@@ -1048,17 +1139,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textInput.SetValue("")
 				rawPath := strings.TrimSpace(strings.TrimPrefix(input, "/attach"))
 
-				cmdDisplay := userBoxStyle.Width(m.width).Render(input)
-				m.messages = append(m.messages, cmdDisplay)
+				m.messages = append(m.messages, createUserMessageFunc(input))
 				m.messageCount++
 
 				if rawPath == "" {
-					msg := "Usage: `/attach <path>`  —  supported: `.txt`, `.pdf`"
-					m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
-						m.renderMarkdown(msg),
-					))
+					m.messages = append(m.messages, createAiMessageFunc("Usage: `/attach <path>`  —  supported: `.txt`, `.pdf`"))
 					m.messageCount++
-					m.viewport.SetContent(strings.Join(m.messages, "\n"))
+					m = m.updateViewportContent()
 					m.viewport.GotoBottom()
 					m = m.syncLayout()
 					return m, nil
@@ -1066,12 +1153,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				af, err := loadAttachedFile(rawPath)
 				if err != nil {
-					errBox := aiBoxStyle.BorderForeground(lipgloss.Color("9")).Width(m.width - 6).Render(
-						errStyle.Render("❌ " + err.Error()),
-					)
-					m.messages = append(m.messages, errBox)
+					m.messages = append(m.messages, createErrorMessageFunc("❌ "+err.Error()))
 					m.messageCount++
-					m.viewport.SetContent(strings.Join(m.messages, "\n"))
+					m = m.updateViewportContent()
 					m.viewport.GotoBottom()
 					m = m.syncLayout()
 					return m, nil
@@ -1093,11 +1177,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					sizeStr = fmt.Sprintf("%.1f MB", float64(af.Size)/1024/1024)
 				}
 				okMsg := fmt.Sprintf("📎 Attached **%s** (%s)  —  will be sent with your next message.", af.Name, sizeStr)
-				m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
-					m.renderMarkdown(okMsg),
-				))
+				m.messages = append(m.messages, createAiMessageFunc(okMsg))
 				m.messageCount++
-				m.viewport.SetContent(strings.Join(m.messages, "\n"))
+				m = m.updateViewportContent()
 				m.viewport.GotoBottom()
 				m = m.syncLayout()
 				return m, nil
@@ -1105,42 +1187,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if input == "/detach" {
 				m.textInput.SetValue("")
-				cmdDisplay := userBoxStyle.Width(m.width).Render(input)
-				m.messages = append(m.messages, cmdDisplay)
+				m.messages = append(m.messages, createUserMessageFunc(input))
 				m.messageCount++
 
 				if len(m.attachedFiles) == 0 {
-					m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
-						infoStyle.Render("No files are currently attached."),
-					))
+					m.messages = append(m.messages, func(m model) string {
+						return aiBoxStyle.Width(m.width - 6).MaxWidth(m.width - 6).Render(infoStyle.Render("No files are currently attached."))
+					})
 				} else {
 					m.attachedFiles = nil
-					m.messages = append(m.messages, aiBoxStyle.Width(m.width-6).Render(
-						m.renderMarkdown("🗑 All attachments cleared."),
-					))
+					m.messages = append(m.messages, createAiMessageFunc("🗑 All attachments cleared."))
 				}
 				m.messageCount++
-				m.viewport.SetContent(strings.Join(m.messages, "\n"))
+				m = m.updateViewportContent()
 				m.viewport.GotoBottom()
 				m = m.syncLayout()
 				return m, nil
 			}
 
-			if result, handled := commands.Dispatch(input, m.sessionID, m.messages); handled {
+			if result, handled := commands.Dispatch(input, m.sessionID, m.getRenderedMessages()); handled {
 				m.textInput.SetValue("")
 
-				cmdDisplay := userBoxStyle.Width(m.width).Render(input)
-				m.messages = append(m.messages, cmdDisplay)
+				m.messages = append(m.messages, createUserMessageFunc(input))
 				m.messageCount++
 
 				if result.ViewportMessage != "" {
-					rendered := m.renderMarkdown(result.ViewportMessage)
-					style := aiBoxStyle
 					if result.IsError {
-						style = aiBoxStyle.BorderForeground(lipgloss.Color("9"))
+						m.messages = append(m.messages, createErrorMessageFunc(result.ViewportMessage))
+					} else {
+						m.messages = append(m.messages, createAiMessageFunc(result.ViewportMessage))
 					}
-					responseBox := style.Width(m.width - 6).Render(rendered)
-					m.messages = append(m.messages, responseBox)
 					m.messageCount++
 				}
 
@@ -1151,7 +1227,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.loreTypingIdx = 0
 					m.loreTyping = true
 
-					m.messages = append(m.messages, "")
+					m.messages = append(m.messages, func(m model) string { return "" })
 					m.loreBoxIdx = len(m.messages) - 1
 					m.messageCount++
 					notifCmd = tea.Tick(80*time.Millisecond, func(_ time.Time) tea.Msg {
@@ -1168,11 +1244,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.sessionID = result.NewSessionID
 				}
 				if result.RestoredMessages != nil {
-					m.messages = result.RestoredMessages
+					m.messages = nil
+					for _, rm := range result.RestoredMessages {
+						text := rm
+						m.messages = append(m.messages, func(m model) string {
+							return lipgloss.NewStyle().MaxWidth(m.width).Render(text)
+						})
+					}
 					m.messageCount = len(result.RestoredMessages)
 				}
 
-				m.viewport.SetContent(strings.Join(m.messages, "\n"))
+				m = m.updateViewportContent()
 				m.viewport.GotoBottom()
 				return m, notifCmd
 			}
@@ -1199,9 +1281,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				userBubbleText += "\n" + infoStyle.Render(strings.Join(names, "  "))
 			}
 
-			displayInput := userBoxStyle.Width(m.width).Render(userBubbleText)
-
-			m.messages = append(m.messages, displayInput)
+			m.messages = append(m.messages, createUserMessageFunc(userBubbleText))
 			m.messageCount++
 
 			inputTrimmed := strings.TrimSpace(input)
@@ -1229,10 +1309,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.generationTime = 0
 			m.tokensPerSecond = 0.0
 
-			content := strings.Join(m.messages, "\n")
-			content += "\n" + m.spinner.View()
-
-			m.viewport.SetContent(content)
+			m = m.updateViewportContent()
 			m.viewport.GotoBottom()
 
 			var wireFiles []FileAttachment
@@ -1272,8 +1349,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			typedBlock := lipgloss.NewStyle().PaddingLeft(4).PaddingTop(2).
 				Render(strings.Join(m.loreTypingLines[:m.loreTypingIdx], "\n"))
 			combined := lipgloss.JoinHorizontal(lipgloss.Top, m.loreLogoBlock, typedBlock)
-			m.messages[m.loreBoxIdx] = aiBoxStyle.Width(m.width - 6).Render(combined)
-			m.viewport.SetContent(strings.Join(m.messages, "\n"))
+
+			m.messages[m.loreBoxIdx] = func(m model) string {
+				return aiBoxStyle.Width(m.width - 6).MaxWidth(m.width - 6).Render(combined)
+			}
+			m = m.updateViewportContent()
 			m.viewport.GotoBottom()
 
 			if m.loreTypingIdx < len(m.loreTypingLines) {
@@ -1298,28 +1378,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = msg.Width
 		m.textInput.Width = msg.Width - 6
 
-		coloredLogo := aiStyle.Render(airiLogo)
-		centeredLogo := lipgloss.PlaceHorizontal(msg.Width, lipgloss.Center, coloredLogo)
-
-		if len(m.messages) > 0 {
-			m.messages[0] = centeredLogo
-		}
-
 		m.renderer, _ = glamour.NewTermRenderer(
 			glamour.WithStandardStyle("dark"),
 			glamour.WithWordWrap(msg.Width-8),
 		)
 
-		content := strings.Join(m.messages, "\n")
-		if m.currentAiChunk != "" {
-			renderedChunk := m.renderMarkdown(m.currentAiChunk)
-			boxedContent := aiBoxStyle.Width(m.width - 6).Render(renderedChunk)
-			content += "\n" + boxedContent
-		} else if m.isLoading {
-			content += "\n" + m.spinner.View()
-		}
-		m.viewport.SetContent(content)
-
+		m = m.updateViewportContent()
 		m = m.syncLayout()
 
 	case spinner.TickMsg:
@@ -1328,9 +1392,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner, cmd = m.spinner.Update(msg)
 
 			if m.currentAiChunk == "" {
-				content := strings.Join(m.messages, "\n")
-				content += "\n" + m.spinner.View()
-				m.viewport.SetContent(content)
+				m = m.updateViewportContent()
 				m.viewport.GotoBottom()
 			}
 
@@ -1355,16 +1417,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				voiceText := strings.TrimPrefix(msg.Content, "🎤 *Voice:* ")
 				voiceText = strings.TrimSpace(voiceText)
 
-				displayInput := userBoxStyle.Width(m.width).Render(voiceText)
-
-				m.messages = append(m.messages, displayInput)
+				m.messages = append(m.messages, createUserMessageFunc(voiceText))
 				m.messageCount++
 				m.pendingVoiceInput = voiceText
 				m.awaitingVoiceChunk = false
 
-				content := strings.Join(m.messages, "\n")
-				content += "\n" + m.spinner.View()
-				m.viewport.SetContent(content)
+				m = m.updateViewportContent()
 				m.viewport.GotoBottom()
 			} else {
 
@@ -1376,13 +1434,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.tokensPerSecond = float64(m.generatedTokens) / elapsed
 				}
 
-				renderedContent := m.renderMarkdown(m.currentAiChunk)
-				boxedContent := aiBoxStyle.Width(m.width - 6).Render(renderedContent)
-
-				displayMessages := append([]string{}, m.messages...)
-				displayMessages = append(displayMessages, boxedContent)
-
-				m.viewport.SetContent(strings.Join(displayMessages, "\n"))
+				m = m.updateViewportContent()
 				m.viewport.GotoBottom()
 			}
 
@@ -1405,10 +1457,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			m.lastAiResponse = m.currentAiChunk
 
-			renderedContent := m.renderMarkdown(m.currentAiChunk)
-			boxedContent := aiBoxStyle.Width(m.width - 6).Render(renderedContent)
-
-			m.messages = append(m.messages, boxedContent)
+			m.messages = append(m.messages, createAiMessageFunc(m.currentAiChunk))
 			m.messageCount++
 			m.currentAiChunk = ""
 			m.isLoading = false
@@ -1419,17 +1468,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.isSpeaking = false
 
 		case "error":
-			errMsg := errStyle.Render("Error: " + msg.Message)
-			m.messages = append(m.messages, errMsg)
-			m.viewport.SetContent(strings.Join(m.messages, "\n"))
+			m.messages = append(m.messages, createErrorMessageFunc("Error: "+msg.Message))
+			m = m.updateViewportContent()
 			m.viewport.GotoBottom()
 			m.isLoading = false
 			m.isSpeaking = false
 
 		default:
 			if msg.Error != "" {
-				m.messages = append(m.messages, errStyle.Render("System Error: "+msg.Error))
-				m.viewport.SetContent(strings.Join(m.messages, "\n"))
+				m.messages = append(m.messages, createErrorMessageFunc("System Error: "+msg.Error))
+				m = m.updateViewportContent()
 				m.viewport.GotoBottom()
 				m.isLoading = false
 				m.connected = false
@@ -1572,10 +1620,10 @@ func (m model) View() string {
 			line := "  " + name + strings.Repeat(" ", pad) + cmd.Description
 
 			if i == selectedInWindow {
-				rows = append(rows, acSelectedRowStyle.Width(rowWidth).Render(line))
+				rows = append(rows, acSelectedRowStyle.Width(rowWidth).MaxWidth(rowWidth).Render(line))
 			} else {
 				row := acNameStyle.Render("  "+name+strings.Repeat(" ", pad)) + acDescStyle.Render(cmd.Description)
-				rows = append(rows, acNameStyle.Width(rowWidth).Render(row))
+				rows = append(rows, acNameStyle.Width(rowWidth).MaxWidth(rowWidth).Render(row))
 			}
 		}
 
@@ -1589,7 +1637,7 @@ func (m model) View() string {
 		innerContent += "\n\n" + strings.TrimSpace(fileBar)
 	}
 
-	inputBox := userBoxStyle.Width(m.width).Render(innerContent)
+	inputBox := userBoxStyle.Width(m.width).MaxWidth(m.width).Render(innerContent)
 
 	return fmt.Sprintf(
 		"%s\n%s",
