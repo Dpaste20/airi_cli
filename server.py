@@ -59,6 +59,21 @@ from utils.GmailTools import (
     send_email,
     send_email_reply,
 )
+from utils.GoalTools import (
+    add_objective,
+    add_sub_goal,
+    create_goal,
+    delete_goal,
+    delete_objective,
+    delete_sub_goal,
+    edit_goal,
+    get_goal,
+    list_goals,
+    log_goal_progress,
+    update_goal_status,
+    update_objective_status,
+    update_sub_goal_status,
+)
 from utils.GoogleDriveTools import (
     download_from_drive,
     list_drive_files,
@@ -108,6 +123,19 @@ DB_PATH = "tmp/alpha_db"
 
 
 TOOLS = [
+    add_objective,
+    add_sub_goal,
+    create_goal,
+    delete_goal,
+    delete_objective,
+    delete_sub_goal,
+    edit_goal,
+    get_goal,
+    list_goals,
+    log_goal_progress,
+    update_goal_status,
+    update_objective_status,
+    update_sub_goal_status,
     shared_browser,
     get_battery_status,
     get_running_processes,
