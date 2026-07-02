@@ -11,7 +11,6 @@ from contextlib import asynccontextmanager
 from typing import List, Optional
 
 import emoji
-import speech_recognition as sr
 import tomllib
 from agno.agent import Agent
 from agno.db.json import JsonDb
@@ -34,6 +33,7 @@ from utils.CameraTools import (
     delete_capture,
     get_recording_status,
     list_captures,
+    open_capture,
     start_recording,
     stop_recording,
     take_picture,
@@ -188,6 +188,7 @@ TOOLS = [
     list_captures,
     start_recording,
     stop_recording,
+    open_capture,
     take_picture,
     take_timelapse,
     launch_game,
@@ -336,8 +337,14 @@ class AgentConfig(BaseModel):
     instructions: List[str]
 
 
+class WhisperConfig(BaseModel):
+    cli_path: str
+    model_path: str
+
+
 class AppConfig(BaseModel):
     agent: AgentConfig
+    whisper: WhisperConfig
 
 
 class ChatResponse(BaseModel):
@@ -427,31 +434,80 @@ def stop_audio():
 
 
 def transcribe_audio(base64_audio: str) -> str:
-    r = sr.Recognizer()
-    temp_filename = ""
+    """
+    Decodes the incoming 44.1kHz audio chunk, downsamples it to 16kHz mono via ffmpeg,
+    and runs it locally through whisper-cli.
+    """
+    raw_config = load_config()
+    config = AppConfig(**raw_config)
+
+    WHISPER_CLI_PATH = config.whisper.cli_path
+    WHISPER_MODEL_PATH = config.whisper.model_path
+
+    input_filename = ""
+    resampled_filename = ""
+
     try:
         audio_bytes = base64.b64decode(base64_audio)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-            f.write(audio_bytes)
-            temp_filename = f.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix="_raw.wav") as f_in:
+            f_in.write(audio_bytes)
+            input_filename = f_in.name
 
-        with sr.AudioFile(temp_filename) as source:
-            audio_data = r.record(source)
-            text = r.recognize_google(audio_data)
-            return text
-    except sr.UnknownValueError:
-        return "Could not understand audio"
-    except sr.RequestError as e:
-        return f"Could not request results; {e}"
+        with tempfile.NamedTemporaryFile(delete=False, suffix="_16k.wav") as f_out:
+            resampled_filename = f_out.name
+
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            input_filename,
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-c:a",
+            "pcm_s16le",
+            resampled_filename,
+        ]
+        subprocess.run(
+            ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
+        )
+
+        whisper_cmd = [
+            WHISPER_CLI_PATH,
+            "-m",
+            WHISPER_MODEL_PATH,
+            "-f",
+            resampled_filename,
+            "-nt",
+        ]
+        result = subprocess.run(whisper_cmd, capture_output=True, text=True, check=True)
+
+        transcript_lines = []
+        for line in result.stdout.splitlines():
+            cleaned_line = line.strip()
+            if cleaned_line and not cleaned_line.startswith("["):
+                transcript_lines.append(cleaned_line)
+
+        final_text = " ".join(transcript_lines).strip()
+
+        return final_text if final_text else "Could not understand audio"
+
+    except subprocess.CalledProcessError as e:
+        print(f"Subprocess conversion execution failed: {e}")
+        return "Audio error: external tool failure"
     except Exception as e:
+        print(f"Audio processing error: {e}")
         return f"Audio error: {e}"
+
     finally:
-        if temp_filename and os.path.exists(temp_filename):
-            try:
-                os.remove(temp_filename)
-            except Exception:
-                pass
+        for path in (input_filename, resampled_filename):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
 
 
 @app.get("/")
