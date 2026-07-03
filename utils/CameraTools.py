@@ -1,4 +1,6 @@
 import os
+import platform
+import shutil
 import signal
 import subprocess
 import time
@@ -30,6 +32,52 @@ def _detect_camera_device() -> str | None:
     return None
 
 
+def _resolve_capture_path(save_dir: Path, filename: str) -> Path | None:
+    """
+    Resolves a filename (with or without extension) to an existing path
+    inside the captures directory. Returns None if no match is found.
+    """
+    target = save_dir / filename
+    if target.exists():
+        return target
+
+    matches = list(save_dir.glob(f"{filename}.*"))
+    return matches[0] if matches else None
+
+
+def _build_still_capture_cmd(output_path: str, camera_index: int) -> list[str] | None:
+    """
+    Builds the command for a single still-photo capture, preferring
+    fswebcam (lightweight) and falling back to ffmpeg. Returns None if
+    neither tool is installed.
+    """
+    if shutil.which("fswebcam"):
+        return [
+            "fswebcam",
+            "-d",
+            f"/dev/video{camera_index}",
+            "--no-banner",
+            "-r",
+            "1280x720",
+            output_path,
+        ]
+    elif shutil.which("ffmpeg"):
+        return [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "v4l2",
+            "-i",
+            f"/dev/video{camera_index}",
+            "-vframes",
+            "1",
+            "-q:v",
+            "2",
+            output_path,
+        ]
+    return None
+
+
 @tool
 def take_picture(
     filename: str = "",
@@ -55,31 +103,8 @@ def take_picture(
     if delay_seconds > 0:
         time.sleep(delay_seconds)
 
-    if shutil.which("fswebcam"):
-        cmd = [
-            "fswebcam",
-            "-d",
-            f"/dev/video{camera_index}",
-            "--no-banner",
-            "-r",
-            "1280x720",
-            output_path,
-        ]
-    elif shutil.which("ffmpeg"):
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "v4l2",
-            "-i",
-            f"/dev/video{camera_index}",
-            "-vframes",
-            "1",
-            "-q:v",
-            "2",
-            output_path,
-        ]
-    else:
+    cmd = _build_still_capture_cmd(output_path, camera_index)
+    if cmd is None:
         return "Error: Neither 'fswebcam' nor 'ffmpeg' is installed. Install one to capture photos."
 
     try:
@@ -261,7 +286,7 @@ def list_captures(media_type: str = "all") -> str:
     if not files:
         return f"No {media_type} captures found in {save_dir}."
 
-    lines = [f"Captures in {save_dir} ({len(files)} file(s)):\n"]
+    lines = [f"📁 Captures in {save_dir} ({len(files)} file(s)):\n"]
     for f in files:
         stat = f.stat()
         size = stat.st_size / 1024
@@ -290,18 +315,65 @@ def delete_capture(filename: str) -> str:
     """
     save_dir = _ensure_captures_dir()
 
-    target = save_dir / filename
-    if not target.exists():
-        matches = list(save_dir.glob(f"{filename}.*"))
-        if not matches:
-            return f"File not found: '{filename}' in {save_dir}"
-        target = matches[0]
+    target = _resolve_capture_path(save_dir, filename)
+    if target is None:
+        return f"File not found: '{filename}' in {save_dir}"
 
     try:
         target.unlink()
-        return f"Deleted: {target.name}"
+        return f" Deleted: {target.name}"
     except Exception as e:
         return f"Error deleting file: {e}"
+
+
+@tool
+def open_capture(filename: str) -> str:
+    """
+    Opens a previously captured photo or video using the system's default
+    image viewer or media player.
+
+    Args:
+        filename : Name of the file to open (with or without extension).
+                   Example: 'photo_20250305_142300' or 'video_20250305_150000.mp4'
+
+    Returns:
+        Confirmation message, or an error if the file isn't found or couldn't be opened.
+    """
+    save_dir = _ensure_captures_dir()
+
+    target = _resolve_capture_path(save_dir, filename)
+    if target is None:
+        return f"File not found: '{filename}' in {save_dir}"
+
+    system = platform.system()
+
+    try:
+        if system == "Linux":
+            if not shutil.which("xdg-open"):
+                return "Error: 'xdg-open' not found. Install it to open files on Linux."
+            subprocess.Popen(
+                ["xdg-open", str(target)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        elif system == "Darwin":
+            subprocess.Popen(
+                ["open", str(target)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        elif system == "Windows":
+            os.startfile(str(target))
+        else:
+            return f"Error: Unsupported OS '{system}' for opening files."
+
+        icon = "🖼" if target.suffix.lower() in {".jpg", ".jpeg", ".png"} else "🎬"
+        return f"{icon} Opening: {target.name}"
+
+    except Exception as e:
+        return f"Error opening file: {e}"
 
 
 @tool
@@ -336,31 +408,7 @@ def take_timelapse(
 
     for i in range(total_shots):
         shot_path = str(session_dir / f"frame_{i + 1:04d}.jpg")
-
-        if shutil.which("fswebcam"):
-            cmd = [
-                "fswebcam",
-                "-d",
-                f"/dev/video{camera_index}",
-                "--no-banner",
-                "-r",
-                "1280x720",
-                shot_path,
-            ]
-        else:
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "v4l2",
-                "-i",
-                f"/dev/video{camera_index}",
-                "-vframes",
-                "1",
-                "-q:v",
-                "2",
-                shot_path,
-            ]
+        cmd = _build_still_capture_cmd(shot_path, camera_index)
 
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=20)
@@ -381,6 +429,3 @@ def take_timelapse(
         + f"\nSaved to: {session_dir}"
         + f"\nTotal span: ~{total_duration}s  |  Interval: {interval_seconds}s per frame"
     )
-
-
-import shutil  # noqa: E402
