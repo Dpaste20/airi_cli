@@ -107,7 +107,8 @@ from utils.RagSearch import get_knowledge_base, initialize_rag, rag_search_tool
 from utils.RegionNewsTools import get_region_news, get_top_news, get_topic_news
 from utils.RestartSystem import restart_system
 from utils.RunDiagnosticTool import run_system_diagnostic
-from utils.Sharedbrowser import shared_browser
+
+# from utils.Sharedbrowser import shared_browser
 from utils.ShellCommandRunner import bash
 from utils.Shutdown import shutdown_system
 from utils.SkillsTools import install_skill, list_skills
@@ -136,7 +137,7 @@ TOOLS = [
     update_goal_status,
     update_objective_status,
     update_sub_goal_status,
-    shared_browser,
+    # shared_browser,
     get_battery_status,
     get_running_processes,
     get_uptime,
