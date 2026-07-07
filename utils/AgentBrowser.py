@@ -1,9 +1,18 @@
 import asyncio
 import os
+import urllib.error
+import urllib.request
 
 from agno.tools import tool
 
-_session_started: bool = False
+_connection_mode: str | None = None
+
+
+AUTO_CONNECT_PROBE_PORTS = tuple(
+    int(p)
+    for p in os.getenv("AGENT_BROWSER_AUTO_CONNECT_PORTS", "9222,9229").split(",")
+    if p.strip()
+)
 
 
 OBSERVATION_COMMANDS = (
@@ -69,6 +78,29 @@ def _resolve_timeout(args: str, wait_for_output: bool) -> int:
     return 120 if wait_for_output else 15
 
 
+def _is_cdp_port_live(port: int, timeout: float = 1.0) -> bool:
+    """
+    Checks whether a CDP-compatible browser is listening on `port` by
+    hitting the standard /json/version endpoint. This mirrors the port-probe
+    step of agent-browser's own --auto-connect discovery.
+    """
+    url = f"http://localhost:{port}/json/version"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.status == 200
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+def _auto_connect_available() -> bool:
+    """
+    Best-effort check for whether --auto-connect will find something to
+    attach to. Approximates agent-browser's discovery order (DevToolsActivePort
+    file, then port probing) by checking the fallback ports directly.
+    """
+    return any(_is_cdp_port_live(p) for p in AUTO_CONNECT_PROBE_PORTS)
+
+
 async def _close_stale_session(env: dict) -> None:
     """Closes any stale agent-browser daemon/session from previous runs."""
     print("Closing any stale agent-browser session...")
@@ -84,12 +116,50 @@ async def _close_stale_session(env: dict) -> None:
         pass
 
 
-async def _run_single(args: str, env: dict) -> tuple[bool, str]:
+async def _determine_connection_mode(env: dict) -> str:
     """
-    Runs a single agent-browser command.
+    Resolves the connection strategy once per process lifetime:
+
+    1. Primary: check whether an existing CDP-reachable Chrome is already
+       running (via _auto_connect_available). If so, every command is run
+       with --auto-connect and we never touch the user's browser lifecycle.
+    2. Fallback: if nothing is reachable, fall back to launching/managing
+       our own headed instance (the original --headed behaviour), after
+       clearing out any stale prior session first.
+
+    The command surface and behaviour are identical either way — this only
+    changes which flag is passed to the CLI and whether stale-session
+    cleanup runs.
+    """
+    global _connection_mode
+
+    if _connection_mode is not None:
+        return _connection_mode
+
+    if _auto_connect_available():
+        print(
+            "agent_browser: existing CDP-reachable browser found — "
+            "using --auto-connect."
+        )
+        _connection_mode = "auto-connect"
+    else:
+        print(
+            "agent_browser: no CDP-reachable browser found — "
+            "launching and managing our own instance."
+        )
+        await _close_stale_session(env)
+        _connection_mode = "own-instance"
+
+    return _connection_mode
+
+
+async def _run_single(args: str, env: dict, mode: str) -> tuple[bool, str]:
+    """
+    Runs a single agent-browser command using the resolved connection mode.
     Returns (success, output_string).
     """
-    full_command = f"agent-browser --headed {args}"
+    flag = "--auto-connect" if mode == "auto-connect" else "--headed"
+    full_command = f"agent-browser {flag} {args}"
     print(f"Executing Browser Command: {full_command}")
 
     wait_for_output = _needs_output(args)
@@ -142,10 +212,18 @@ async def agent_browser(args: str) -> str:
     """
     Controls a web browser to navigate, interact, and extract data using the 'agent-browser' CLI.
 
-    Runs in native mode (direct CDP via Rust binary) with a persistent profile and headed
-    (visible) browser window. Configured via environment variables injected per command:
+    Runs in native mode (direct CDP via Rust binary), configured via environment
+    variables injected per command:
       AGENT_BROWSER_NATIVE=1
       AGENT_BROWSER_PROFILE=./airi_browse_dir
+
+    CONNECTION STRATEGY
+    --------------------
+    On first use this tool checks whether a CDP-reachable Chrome is already
+    running and, if so, attaches to it with --auto-connect. Only if nothing
+    is found does it fall back to launching and managing its own headed
+    instance with a persistent profile. The command surface below behaves
+    identically either way — this only affects how the browser is reached.
 
     CRITICAL — BATCHING RULE
     ------------------------
@@ -356,15 +434,11 @@ async def agent_browser(args: str) -> str:
     Args:
         args (str): Arguments to pass to agent-browser CLI (e.g., "open google.com", "click @e1").
     """
-    global _session_started
-
     env = os.environ.copy()
     env["AGENT_BROWSER_NATIVE"] = "1"
     env["AGENT_BROWSER_PROFILE"] = os.path.abspath("airi_browse_dir")
 
-    if not _session_started:
-        await _close_stale_session(env)
-        _session_started = True
+    mode = await _determine_connection_mode(env)
 
     commands = [
         line.strip()
@@ -376,12 +450,12 @@ async def agent_browser(args: str) -> str:
         return "Error: No commands provided."
 
     if len(commands) == 1:
-        _, result = await _run_single(commands[0], env)
+        _, result = await _run_single(commands[0], env, mode)
         return result
 
     results: list[str] = []
     for i, cmd in enumerate(commands, 1):
-        success, output = await _run_single(cmd, env)
+        success, output = await _run_single(cmd, env, mode)
         results.append(f"[{i}] {cmd}\n{output}")
         if not success:
             remaining = len(commands) - i
