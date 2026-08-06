@@ -39,7 +39,6 @@ func Dispatch(input string, currentSessionID string, messages []string) (Result,
 		return ToolsList(args)
 	case "web-ui", "web":
 		return LaunchWebUI()
-
 	case "lore":
 		return ShowLogo(args)
 	default:

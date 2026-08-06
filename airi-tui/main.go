@@ -174,7 +174,7 @@ type CommandInfo struct {
 func defaultKnownCommands() []CommandInfo {
 	return []CommandInfo{
 		{"/help", "Show this screen"},
-		{"/attach", "Attach a .txt or .pdf file to next message"},
+		{"/attach", "Attach a document (opens picker, or give a path)"},
 		{"/detach", "Remove all staged attachments"},
 		{"/save-session", "Save current conversation"},
 		{"/resume-session", "Restore a saved conversation"},
@@ -447,10 +447,34 @@ func (m model) syncLayout() model {
 
 func mimeFromExt(path string) (string, bool) {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".txt", ".md", ".log", ".csv":
+	case ".txt", ".md", ".log":
 		return "text/plain", true
+	case ".csv":
+		return "text/csv", true
 	case ".pdf":
 		return "application/pdf", true
+	case ".doc":
+		return "application/msword", true
+	case ".docx", ".docm":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document", true
+	case ".ppt", ".pps", ".pot":
+		return "application/vnd.ms-powerpoint", true
+	case ".pptx", ".pptm", ".ppsx", ".ppsm":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation", true
+	case ".xls":
+		return "application/vnd.ms-excel", true
+	case ".xlsx", ".xlsm", ".xlsb":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", true
+	case ".odt":
+		return "application/vnd.oasis.opendocument.text", true
+	case ".ods":
+		return "application/vnd.oasis.opendocument.spreadsheet", true
+	case ".odp":
+		return "application/vnd.oasis.opendocument.presentation", true
+	case ".rtf":
+		return "application/rtf", true
+	case ".epub":
+		return "application/epub+zip", true
 	default:
 		return "", false
 	}
@@ -470,7 +494,7 @@ func loadAttachedFile(rawPath string) (AttachedFile, error) {
 
 	mime, ok := mimeFromExt(path)
 	if !ok {
-		return AttachedFile{}, fmt.Errorf("unsupported file type — only .txt and .pdf are accepted")
+		return AttachedFile{}, fmt.Errorf("unsupported file type — attach a document (.docx, .pptx, .xlsx, .pdf, ...)")
 	}
 
 	info, err := os.Stat(path)
@@ -825,6 +849,25 @@ func (m model) renderStatusBar() string {
 	return statusBarStyle.MaxWidth(maxWidth).Render(statusContent)
 }
 
+func (m model) openFilePicker() (model, tea.Cmd) {
+	startDir, err := os.UserHomeDir()
+	if err != nil {
+		startDir, _ = os.Getwd()
+	}
+	items, err := loadFpDir(startDir)
+	if err != nil {
+		m.notification = "✗ Cannot open " + startDir
+		return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+			return clearNotificationMsg{}
+		})
+	}
+	m.fpDir = startDir
+	m.fpItems = items
+	m.fpIdx = 0
+	m.showFilePicker = true
+	return m, nil
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
 		tiCmd tea.Cmd
@@ -888,7 +931,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				if item.Mime == "" {
-					m.notification = "⚠ Only .txt and .pdf files can be attached"
+					m.notification = "⚠ Unsupported file type — attach a document (.docx, .pptx, .xlsx, .pdf, ...)"
 					return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
 						return clearNotificationMsg{}
 					})
@@ -977,23 +1020,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showFilePicker = false
 				return m, nil
 			}
-
-			startDir, err := os.UserHomeDir()
-			if err != nil {
-				startDir, _ = os.Getwd()
-			}
-			items, err := loadFpDir(startDir)
-			if err != nil {
-				m.notification = "✗ Cannot open " + startDir
-				return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
-					return clearNotificationMsg{}
-				})
-			}
-			m.fpDir = startDir
-			m.fpItems = items
-			m.fpIdx = 0
-			m.showFilePicker = true
-			return m, nil
+			return m.openFilePicker()
 
 		case tea.KeyTab:
 			if len(m.suggestions) > 0 {
@@ -1139,17 +1166,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textInput.SetValue("")
 				rawPath := strings.TrimSpace(strings.TrimPrefix(input, "/attach"))
 
+				if rawPath == "" {
+					return m.openFilePicker()
+				}
+
 				m.messages = append(m.messages, createUserMessageFunc(input))
 				m.messageCount++
-
-				if rawPath == "" {
-					m.messages = append(m.messages, createAiMessageFunc("Usage: `/attach <path>`  —  supported: `.txt`, `.pdf`"))
-					m.messageCount++
-					m = m.updateViewportContent()
-					m.viewport.GotoBottom()
-					m = m.syncLayout()
-					return m, nil
-				}
 
 				af, err := loadAttachedFile(rawPath)
 				if err != nil {
@@ -1540,7 +1562,7 @@ func (m model) View() string {
 %s
 
 %s
-  /attach <path>          Attach a .txt or .pdf file to next message
+  /attach [path]          Attach a document (opens file picker if no path)
   /detach                 Remove all staged attachments
   /save-session [name]    Save current conversation
   /resume-session [name]  Restore a saved conversation

@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import io
 import logging
 import os
 import shutil
@@ -40,6 +39,10 @@ from utils.CameraTools import (
     take_timelapse,
 )
 from utils.CronTools import add_cron_job, delete_cron_job, get_cron_jobs
+from utils.DocumentToMarkdown import (
+    convert_document,
+    decode_file_content as decode_attachment,
+)
 from utils.FetchUrls import fetch_urls
 from utils.FileModify import file_modify
 from utils.FileSearch import file_search
@@ -214,6 +217,7 @@ TOOLS = [
     wake_mana_agent,
     list_skills,
     install_skill,
+    convert_document,
 ]
 
 storage_db: Optional[JsonDb] = None
@@ -352,38 +356,9 @@ class ChatResponse(BaseModel):
     response: str
 
 
-def _extract_pdf_text(raw_bytes: bytes, name: str) -> str:
-
-    try:
-        reader = PdfReader(io.BytesIO(raw_bytes))
-        pages = []
-        for i, page in enumerate(reader.pages, 1):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages.append(f"--- Page {i} ---\n{text.strip()}")
-        if not pages:
-            return (
-                f"[PDF '{name}': no extractable text found (may be scanned/image-only)]"
-            )
-        return "\n\n".join(pages)
-    except Exception as exc:
-        return f"[PDF '{name}': extraction failed — {exc}]"
-
-
 def decode_file_content(file: FileAttachment) -> str:
-    """Decode a FileAttachment into a plain-text string ready for the prompt."""
-    try:
-        raw = base64.b64decode(file.content)
-    except Exception as exc:
-        return f"[File '{file.name}': could not decode base64 — {exc}]"
-
-    if file.mime_type == "application/pdf":
-        return _extract_pdf_text(raw, file.name)
-
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return raw.decode("utf-8", errors="replace")
+    """Decode a FileAttachment into Markdown (via anydoc) or plain text."""
+    return decode_attachment(file.name, file.content)
 
 
 def build_message_with_files(message: str, files: List[FileAttachment]) -> str:
@@ -392,13 +367,13 @@ def build_message_with_files(message: str, files: List[FileAttachment]) -> str:
 
     The agent receives a single string like:
 
-        <file name="report.pdf" type="application/pdf">
-        ... extracted text ...
-        </file>
+        <attached_file name="report.pdf" type="application/pdf">
+        ... converted markdown ...
+        </attached_file>
 
-        <file name="notes.txt" type="text/plain">
-        ... raw text ...
-        </file>
+        <attached_file name="notes.txt" type="text/plain">
+        ... plain text ...
+        </attached_file>
 
         <user_message>
         Summarise the report above.
@@ -410,10 +385,21 @@ def build_message_with_files(message: str, files: List[FileAttachment]) -> str:
     blocks: List[str] = []
     for f in files:
         body = decode_file_content(f)
-        blocks.append(f'<file name="{f.name}" type="{f.mime_type}">\n{body}\n</file>')
+        blocks.append(
+            f'<attached_file name="{f.name}" type="{f.mime_type}">\n'
+            f"{body}\n"
+            f"</attached_file>"
+        )
 
     joined = "\n\n".join(blocks)
-    return f"{joined}\n\n<user_message>\n{message}\n</user_message>"
+    return (
+        f"{joined}\n\n"
+        f"<user_message>\n{message}\n</user_message>\n\n"
+        f"Note: the full content of every attached file is included above, "
+        f"already converted to Markdown. The files are NOT on disk — do not "
+        f"search for them, do not open them, and do not try to read the "
+        f"original files. Answer using the content provided above only."
+    )
 
 
 def speak_response(text: str):
@@ -599,7 +585,8 @@ async def websocket_chat(websocket: WebSocket):
 
                 start_time = time.perf_counter()
 
-                response_iterator = local_agent.arun(message, stream=True)
+                full_message = build_message_with_files(message, attached_files)
+                response_iterator = local_agent.arun(full_message, stream=True)
 
                 full_response_text = ""
                 last_chunk = None
