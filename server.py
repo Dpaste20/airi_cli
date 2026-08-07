@@ -23,6 +23,14 @@ from pydantic import BaseModel
 from utils.AdbKeyPress import adb_key_press
 from utils.AgentBrowser import agent_browser
 from utils.AgentDevice import agent_device
+from utils.WebSearch import web_search
+from utils.AgentReachTools import (
+    get_github_repo,
+    get_youtube_transcript,
+    read_rss_feed,
+    read_webpage,
+    reach_doctor,
+)
 from utils.CalendarTools import (
     create_event,
     delete_event,
@@ -118,6 +126,7 @@ from utils.SkillsTools import install_skill, list_skills
 from utils.SleepMode import sleep_mode_system
 from utils.SystemInfo import get_system_info
 from utils.TelegramTools import list_telegram_contacts, send_telegram_message
+from utils.WebSearch import web_search
 
 logging.getLogger("agno").setLevel(logging.ERROR)
 load_dotenv()
@@ -159,8 +168,7 @@ TOOLS = [
     shutdown_system,
     sleep_mode_system,
     restart_system,
-    fetch_urls,
-    open_url,
+    web_search,
     bash,
     get_unread_emails,
     search_emails,
@@ -218,6 +226,11 @@ TOOLS = [
     list_skills,
     install_skill,
     convert_document,
+    read_webpage,
+    get_youtube_transcript,
+    get_github_repo,
+    read_rss_feed,
+    reach_doctor,
 ]
 
 storage_db: Optional[JsonDb] = None
