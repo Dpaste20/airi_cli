@@ -174,7 +174,7 @@ type CommandInfo struct {
 func defaultKnownCommands() []CommandInfo {
 	return []CommandInfo{
 		{"/help", "Show this screen"},
-		{"/attach", "Attach a document (opens picker, or give a path)"},
+		{"/attach", "Attach a file (document or image — opens picker, or give a path)"},
 		{"/detach", "Remove all staged attachments"},
 		{"/save-session", "Save current conversation"},
 		{"/resume-session", "Restore a saved conversation"},
@@ -475,6 +475,26 @@ func mimeFromExt(path string) (string, bool) {
 		return "application/rtf", true
 	case ".epub":
 		return "application/epub+zip", true
+	case ".png":
+		return "image/png", true
+	case ".jpg", ".jpeg":
+		return "image/jpeg", true
+	case ".gif":
+		return "image/gif", true
+	case ".bmp":
+		return "image/bmp", true
+	case ".webp":
+		return "image/webp", true
+	case ".svg":
+		return "image/svg+xml", true
+	case ".tiff", ".tif":
+		return "image/tiff", true
+	case ".ico":
+		return "image/x-icon", true
+	case ".avif":
+		return "image/avif", true
+	case ".heic", ".heif":
+		return "image/heic", true
 	default:
 		return "", false
 	}
@@ -494,16 +514,19 @@ func loadAttachedFile(rawPath string) (AttachedFile, error) {
 
 	mime, ok := mimeFromExt(path)
 	if !ok {
-		return AttachedFile{}, fmt.Errorf("unsupported file type — attach a document (.docx, .pptx, .xlsx, .pdf, ...)")
+		return AttachedFile{}, fmt.Errorf("unsupported file type — attach a document (.docx, .pptx, .xlsx, .pdf, ...) or image (.png, .jpg, .webp, ...)")
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
 		return AttachedFile{}, fmt.Errorf("file not found: %s", path)
 	}
-	const maxBytes = 20 * 1024 * 1024
+	maxBytes := int64(20 * 1024 * 1024)
+	if strings.HasPrefix(mime, "image/") {
+		maxBytes = int64(15 * 1024 * 1024)
+	}
 	if info.Size() > maxBytes {
-		return AttachedFile{}, fmt.Errorf("file too large (max 20 MB): %s", filepath.Base(path))
+		return AttachedFile{}, fmt.Errorf("file too large (max %d MB): %s", maxBytes/1024/1024, filepath.Base(path))
 	}
 
 	data, err := os.ReadFile(path)
@@ -603,6 +626,8 @@ func (m model) renderFilePicker() string {
 			icon := "📄 "
 			if item.Mime == "application/pdf" {
 				icon = "📕 "
+			} else if strings.HasPrefix(item.Mime, "image/") {
+				icon = "🖼️ "
 			}
 			sizeStr := fmt.Sprintf("%.1f KB", float64(item.Size)/1024)
 			if item.Size >= 1024*1024 {
@@ -931,7 +956,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				if item.Mime == "" {
-					m.notification = "⚠ Unsupported file type — attach a document (.docx, .pptx, .xlsx, .pdf, ...)"
+					m.notification = "⚠ Unsupported file type — attach a document (.docx, .pptx, .xlsx, .pdf, ...) or image (.png, .jpg, .webp, ...)"
 					return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
 						return clearNotificationMsg{}
 					})
@@ -1539,6 +1564,8 @@ func (m model) renderFileBar() string {
 		icon := "📄"
 		if af.MimeType == "application/pdf" {
 			icon = "📕"
+		} else if strings.HasPrefix(af.MimeType, "image/") {
+			icon = "🖼️"
 		}
 		badges = append(badges, fileBadgeStyle.Render(icon+" "+af.Name))
 	}
@@ -1562,7 +1589,7 @@ func (m model) View() string {
 %s
 
 %s
-  /attach [path]          Attach a document (opens file picker if no path)
+  /attach [path]          Attach a file (document or image — opens picker if no path)
   /detach                 Remove all staged attachments
   /save-session [name]    Save current conversation
   /resume-session [name]  Restore a saved conversation

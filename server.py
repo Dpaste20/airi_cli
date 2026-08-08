@@ -13,11 +13,13 @@ import emoji
 import tomllib
 from agno.agent import Agent
 from agno.db.json import JsonDb
+from agno.media import Image
 from agno.models.ollama import Ollama
 from agno.skills import LocalSkills, Skills
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from ollama import Client as OllamaClient
 from pydantic import BaseModel
 
 from utils.AdbKeyPress import adb_key_press
@@ -133,6 +135,26 @@ load_dotenv()
 
 
 DB_PATH = "tmp/alpha_db"
+
+IMAGE_MAX_BYTES = 15 * 1024 * 1024
+
+IMAGE_EXTENSIONS = {
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
+    "bmp",
+    "webp",
+    "svg",
+    "tiff",
+    "tif",
+    "ico",
+    "avif",
+    "heic",
+    "heif",
+}
+
+_vision_cache: dict[str, bool] = {}
 
 
 TOOLS = [
@@ -374,29 +396,73 @@ def decode_file_content(file: FileAttachment) -> str:
     return decode_attachment(file.name, file.content)
 
 
-def build_message_with_files(message: str, files: List[FileAttachment]) -> str:
+def is_image_file(file: FileAttachment) -> bool:
+    """True if the attachment looks like an image (by mime type or extension)."""
+    mime = (file.mime_type or "").strip().lower()
+    if mime.startswith("image/"):
+        return True
+    ext = os.path.splitext(file.name)[1].lstrip(".").lower()
+    return ext in IMAGE_EXTENSIONS
+
+
+def build_image_attachments(files: List[FileAttachment]) -> List[Image]:
+    """Convert image attachments into agno Image objects, validating size/content."""
+    images: List[Image] = []
+    for f in files:
+        if not is_image_file(f):
+            continue
+        try:
+            raw = base64.b64decode(f.content)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Image '{f.name}' could not be decoded from base64: {exc}",
+            )
+        if len(raw) > IMAGE_MAX_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Image '{f.name}' is {len(raw) / 1024 / 1024:.1f} MB "
+                    f"(max {IMAGE_MAX_BYTES / 1024 / 1024:.0f} MB)"
+                ),
+            )
+        images.append(Image.from_base64(f.content, mime_type=f.mime_type or None))
+    return images
+
+
+def model_supports_vision(model_id: str) -> bool:
+    """Cached check of whether the Ollama model advertises the vision capability."""
+    if model_id in _vision_cache:
+        return _vision_cache[model_id]
+
+    try:
+        info = OllamaClient().show(model_id)
+        _vision_cache[model_id] = "vision" in (info.capabilities or [])
+    except Exception as e:
+        print(f"Warning: could not inspect model '{model_id}' capabilities: {e}")
+        _vision_cache[model_id] = False
+
+    return _vision_cache[model_id]
+
+
+def build_message_with_files(
+    message: str, files: List[FileAttachment], images: Optional[List[Image]] = None
+) -> tuple[str, List[Image]]:
     """
-    Prepend file contents to the user message as clearly delimited blocks.
+    Split attachments into documents (converted to Markdown and prepended to the
+    prompt) and images (returned as agno Image objects for the vision pipeline).
 
-    The agent receives a single string like:
-
-        <attached_file name="report.pdf" type="application/pdf">
-        ... converted markdown ...
-        </attached_file>
-
-        <attached_file name="notes.txt" type="text/plain">
-        ... plain text ...
-        </attached_file>
-
-        <user_message>
-        Summarise the report above.
-        </user_message>
+    Returns (prompt, images).
     """
-    if not files:
-        return message
+    if images is None:
+        images = build_image_attachments(files)
+    doc_files = [f for f in files if not is_image_file(f)]
+
+    if not doc_files:
+        return message, images
 
     blocks: List[str] = []
-    for f in files:
+    for f in doc_files:
         body = decode_file_content(f)
         blocks.append(
             f'<attached_file name="{f.name}" type="{f.mime_type}">\n'
@@ -405,7 +471,7 @@ def build_message_with_files(message: str, files: List[FileAttachment]) -> str:
         )
 
     joined = "\n\n".join(blocks)
-    return (
+    prompt = (
         f"{joined}\n\n"
         f"<user_message>\n{message}\n</user_message>\n\n"
         f"Note: the full content of every attached file is included above, "
@@ -413,6 +479,14 @@ def build_message_with_files(message: str, files: List[FileAttachment]) -> str:
         f"search for them, do not open them, and do not try to read the "
         f"original files. Answer using the content provided above only."
     )
+
+    if images:
+        prompt += (
+            f"\n\n{len(images)} image(s) are attached as actual images and "
+            f"available to you directly — analyze them visually as needed."
+        )
+
+    return prompt, images
 
 
 def speak_response(text: str):
@@ -518,14 +592,30 @@ async def root():
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     try:
+        images = build_image_attachments(request.files)
+
+        if images:
+            model_id = AppConfig(**load_config()).agent.model.id
+            if not model_supports_vision(model_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Image input is not supported by the current model "
+                        f"({model_id}). Switch to a vision-capable model to "
+                        f"analyze images."
+                    ),
+                )
+
         local_agent = get_agent(session_id=request.session_id)
-        full_message = build_message_with_files(request.message, request.files)
-        response = await local_agent.arun(full_message)
+        full_message, _ = build_message_with_files(request.message, request.files, images)
+        response = await local_agent.arun(full_message, images=images)
 
         file_names = [f.name for f in request.files] if request.files else None
         save_chat_log(request.session_id, request.message, response.content, file_names)
 
         return ChatResponse(response=response.content)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -569,6 +659,27 @@ async def websocket_chat(websocket: WebSocket):
                 except Exception as parse_err:
                     print(f"Skipping malformed file attachment: {parse_err}")
 
+            try:
+                images = build_image_attachments(attached_files)
+            except HTTPException as e:
+                await websocket.send_json({"type": "error", "message": str(e.detail)})
+                continue
+
+            if images:
+                model_id = AppConfig(**load_config()).agent.model.id
+                if not model_supports_vision(model_id):
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": (
+                                f"Image input is not supported by the current "
+                                f"model ({model_id}). Switch to a vision-capable "
+                                f"model to analyze images."
+                            ),
+                        }
+                    )
+                    continue
+
             session_id = data.get("session_id", f"ws_{id(websocket)}")
 
             if not message:
@@ -598,8 +709,12 @@ async def websocket_chat(websocket: WebSocket):
 
                 start_time = time.perf_counter()
 
-                full_message = build_message_with_files(message, attached_files)
-                response_iterator = local_agent.arun(full_message, stream=True)
+                full_message, _ = build_message_with_files(
+                    message, attached_files, images
+                )
+                response_iterator = local_agent.arun(
+                    full_message, images=images, stream=True
+                )
 
                 full_response_text = ""
                 last_chunk = None
@@ -624,7 +739,10 @@ async def websocket_chat(websocket: WebSocket):
 
                 if full_response_text:
                     speak_response(full_response_text)
-                    save_chat_log(session_id, message, full_response_text)
+                    file_names = (
+                        [f.name for f in attached_files] if attached_files else None
+                    )
+                    save_chat_log(session_id, message, full_response_text, file_names)
 
                 await websocket.send_json(
                     {
