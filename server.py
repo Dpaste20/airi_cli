@@ -405,9 +405,49 @@ def is_image_file(file: FileAttachment) -> bool:
     return ext in IMAGE_EXTENSIONS
 
 
+IMAGE_MAX_EDGE = 1280
+IMAGE_JPEG_QUALITY = 88
+
+
+def _normalize_image(raw: bytes) -> tuple[bytes, str]:
+    """Downscale and re-encode an image so the model endpoint never rejects it.
+
+    Screenshots from clipboard/attachments can be huge (multi-MB, 4K); model
+    providers (ollama.com cloud proxied via local ollama) 500 / drop such
+    requests. Returns (re-encoded bytes, mime_type).
+    """
+    from io import BytesIO
+
+    from PIL import Image as PILImage
+
+    try:
+        img = PILImage.open(BytesIO(raw))
+        w, h = img.size
+        longest = max(w, h)
+        if longest > IMAGE_MAX_EDGE:
+            scale = IMAGE_MAX_EDGE / longest
+            img = img.resize(
+                (max(1, int(w * scale)), max(1, int(h * scale))), PILImage.LANCZOS
+            )
+
+        if img.mode == "RGBA":
+            background = PILImage.new("RGB", img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[-1])
+            img = background
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        out = BytesIO()
+        img.save(out, format="JPEG", quality=IMAGE_JPEG_QUALITY)
+        return out.getvalue(), "image/jpeg"
+    except Exception:
+        return raw, ""
+
+
 def build_image_attachments(files: List[FileAttachment]) -> List[Image]:
     """Convert image attachments into agno Image objects, validating size/content."""
     images: List[Image] = []
+    total_encoded = 0
     for f in files:
         if not is_image_file(f):
             continue
@@ -426,7 +466,20 @@ def build_image_attachments(files: List[FileAttachment]) -> List[Image]:
                     f"(max {IMAGE_MAX_BYTES / 1024 / 1024:.0f} MB)"
                 ),
             )
-        images.append(Image.from_base64(f.content, mime_type=f.mime_type or None))
+
+        normalized, normalized_mime = _normalize_image(raw)
+        content = base64.b64encode(normalized).decode()
+        mime_type = normalized_mime or f.mime_type or None
+        total_encoded += len(content)
+        if total_encoded > IMAGE_MAX_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Images are too large after normalization "
+                    f"(max {IMAGE_MAX_BYTES / 1024 / 1024:.0f} MB total)"
+                ),
+            )
+        images.append(Image.from_base64(content, mime_type=mime_type))
     return images
 
 
