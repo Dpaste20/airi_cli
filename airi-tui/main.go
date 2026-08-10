@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -1040,6 +1041,56 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case tea.KeyCtrlV:
+			data, mime, err := pasteClipboardImage()
+			if err != nil {
+				text, terr := clipboard.ReadAll()
+				if terr == nil && strings.TrimSpace(text) != "" {
+					m.textInput.SetValue(m.textInput.Value() + text)
+					m.textInput.CursorEnd()
+					return m, nil
+				}
+				m.notification = "✗ Clipboard does not contain an image (copy one first, then press ctrl+v)"
+				return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+					return clearNotificationMsg{}
+				})
+			}
+
+			const maxClipImageBytes = 15 * 1024 * 1024
+			if len(data) > maxClipImageBytes {
+				m.notification = fmt.Sprintf("✗ Clipboard image too large (max 15 MB, got %.1f MB)", float64(len(data))/1024/1024)
+				return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+					return clearNotificationMsg{}
+				})
+			}
+
+			ext := "png"
+			for _, f := range clipboardImageFormats {
+				if f.mime == mime {
+					ext = f.ext
+					break
+				}
+			}
+			name := fmt.Sprintf("clipboard_%s.%s", time.Now().Format("20060102_150405"), ext)
+			af := AttachedFile{
+				Name:     name,
+				Path:     "clipboard:" + name,
+				Content:  base64.StdEncoding.EncodeToString(data),
+				MimeType: mime,
+				Size:     int64(len(data)),
+			}
+			m.attachedFiles = append(m.attachedFiles, af)
+			m = m.syncLayout()
+
+			sizeStr := fmt.Sprintf("%.1f KB", float64(af.Size)/1024)
+			if af.Size >= 1024*1024 {
+				sizeStr = fmt.Sprintf("%.1f MB", float64(af.Size)/1024/1024)
+			}
+			m.notification = fmt.Sprintf("📋 %s (%s) attached from clipboard", name, sizeStr)
+			return m, tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+				return clearNotificationMsg{}
+			})
+
 		case tea.KeyCtrlF:
 			if m.showFilePicker {
 				m.showFilePicker = false
@@ -1600,6 +1651,7 @@ func (m model) View() string {
 
 %s
   ctrl + f   Open file picker (browse & attach)
+  ctrl + v   Paste image from clipboard (attach as new attachment)
   ctrl + y   Copy last Airi response to clipboard
   ctrl + d   Clear all staged file attachments
   ctrl + c   Quit
@@ -1732,4 +1784,76 @@ func main() {
 	if _, err := p.Run(); err != nil {
 		log.Fatal("Error running program:", err)
 	}
+}
+
+const clipImageTimeout = 5 * time.Second
+
+var clipboardImageFormats = []struct {
+	mime string
+	ext  string
+}{
+	{"image/png", "png"},
+	{"image/jpeg", "jpg"},
+	{"image/webp", "webp"},
+	{"image/gif", "gif"},
+	{"image/bmp", "bmp"},
+	{"image/tiff", "tiff"},
+}
+
+// pasteClipboardImage reads an image from the system clipboard (Wayland or X11).
+// It returns the raw image bytes and the mime type, or an error if the
+// clipboard does not contain a supported image.
+func pasteClipboardImage() ([]byte, string, error) {
+	if os.Getenv("WAYLAND_DISPLAY") != "" {
+		if data, mime, err := pasteViaWlPaste(); err == nil {
+			return data, mime, nil
+		}
+	}
+	if os.Getenv("DISPLAY") != "" {
+		if data, mime, err := pasteViaXclip(); err == nil {
+			return data, mime, nil
+		}
+	}
+	return nil, "", fmt.Errorf("clipboard does not contain an image")
+}
+
+func pasteViaWlPaste() ([]byte, string, error) {
+	if _, err := exec.LookPath("wl-paste"); err != nil {
+		return nil, "", fmt.Errorf("wl-paste not found")
+	}
+	for _, f := range clipboardImageFormats {
+		ctx, cancel := context.WithTimeout(context.Background(), clipImageTimeout)
+		out, err := exec.CommandContext(ctx, "wl-paste", "-t", f.mime, "--no-newline").Output()
+		cancel()
+		if err == nil && len(out) > 0 {
+			return out, f.mime, nil
+		}
+	}
+	return nil, "", fmt.Errorf("no image type on wayland clipboard")
+}
+
+func pasteViaXclip() ([]byte, string, error) {
+	if _, err := exec.LookPath("xclip"); err != nil {
+		return nil, "", fmt.Errorf("xclip not found")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), clipImageTimeout)
+	targets, err := exec.CommandContext(ctx, "xclip", "-selection", "clipboard", "-t", "TARGETS", "-o").Output()
+	cancel()
+	if err != nil {
+		return nil, "", fmt.Errorf("cannot read clipboard targets: %v", err)
+	}
+
+	available := string(targets)
+	for _, f := range clipboardImageFormats {
+		if strings.Contains(available, f.mime) {
+			ctx, cancel = context.WithTimeout(context.Background(), clipImageTimeout)
+			out, err := exec.CommandContext(ctx, "xclip", "-selection", "clipboard", "-t", f.mime, "-o").Output()
+			cancel()
+			if err == nil && len(out) > 0 {
+				return out, f.mime, nil
+			}
+		}
+	}
+	return nil, "", fmt.Errorf("no image target on x11 clipboard")
 }
