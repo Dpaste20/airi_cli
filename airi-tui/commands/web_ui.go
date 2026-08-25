@@ -7,14 +7,55 @@ import (
 	"path/filepath"
 )
 
-func LaunchWebUI() (Result, bool) {
+func findLauncher() (string, error) {
+	launcherName := "LauchWebUI"
+
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		for {
+			candidate := filepath.Join(dir, "commands", launcherName)
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				return candidate, nil
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		cwd = "."
+		return "", fmt.Errorf("could not locate %s: %v", launcherName, err)
 	}
 
-	targetPath := filepath.Join(cwd, "commands", "LauchWebUI")
+	dir := cwd
+	for {
+		candidate := filepath.Join(dir, "commands", launcherName)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	return "", fmt.Errorf("could not locate %s in any parent directory", launcherName)
+}
+
+func LaunchWebUI() (Result, bool) {
+
+	targetPath, err := findLauncher()
+	if err != nil {
+		return Result{
+			IsError:         true,
+			ViewportMessage: fmt.Sprintf("❌ **Failed to launch Web UI:**\n`%v`", err),
+			Notification:    "Launch failed",
+		}, true
+	}
 
 	cmd := exec.Command(targetPath)
 
