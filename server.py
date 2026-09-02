@@ -2,7 +2,6 @@ import asyncio
 import base64
 import logging
 import os
-import shutil
 import subprocess
 import tempfile
 import time
@@ -102,6 +101,18 @@ from utils.ManaNetwork import (
     wake_mana_agent,
 )
 from utils.MapTools import get_directions, map_search
+from utils.MemorySystem import (
+    ashutdown as ashutdown_memory,
+    capture_and_notify,
+    initialize as initialize_memory,
+    recall_for_prompt,
+)
+from utils.MemorySystem.tools import (
+    airi_conversation_search,
+    airi_delete_memory,
+    airi_memory_search,
+    airi_wipe_memory,
+)
 from utils.NotionTools import notion
 from utils.OpenApplication import open_application
 from utils.OpenUrl import open_url
@@ -253,6 +264,10 @@ TOOLS = [
     get_github_repo,
     read_rss_feed,
     reach_doctor,
+    airi_memory_search,
+    airi_conversation_search,
+    airi_delete_memory,
+    airi_wipe_memory,
 ]
 
 storage_db: Optional[JsonDb] = None
@@ -264,24 +279,13 @@ async def lifespan(app: FastAPI):
     print("Initializing Airi Backend...")
     storage_db = JsonDb(db_path=DB_PATH)
     await initialize_rag()
+    initialize_memory()
     print("System initialized successfully")
     yield
     print("\nCleaning up session...")
 
     stop_audio()
-
-    if os.path.exists(DB_PATH):
-        try:
-            if os.path.isdir(DB_PATH):
-                shutil.rmtree(DB_PATH)
-            else:
-                os.remove(DB_PATH)
-
-            print(f"Session database '{DB_PATH}' deleted.")
-        except PermissionError:
-            print(f"Warning: Could not delete {DB_PATH}.")
-        except Exception as e:
-            print(f"Error deleting database: {e}")
+    await ashutdown_memory()
 
 
 app = FastAPI(title="Airi Agent API", lifespan=lifespan)
@@ -321,9 +325,45 @@ def save_chat_log(
         print(f"Error saving chat log: {e}")
 
 
+def _resolve_path(p: str) -> str:
+    if os.path.isabs(p):
+        return p
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), p)
+
+
 def load_config(config_path="config.toml"):
+    config_path = _resolve_path(config_path)
     with open(config_path, "rb") as file:
         return tomllib.load(file)
+
+
+AGENTS_TOML_PATH = _resolve_path("agents.toml")
+
+
+def load_agent_catalog(config_path: str = AGENTS_TOML_PATH) -> List[dict]:
+    config_path = _resolve_path(config_path)
+    try:
+        with open(config_path, "rb") as file:
+            data = tomllib.load(file)
+    except FileNotFoundError:
+        print(f"Warning: {config_path} not found — /agents catalog unavailable")
+        return []
+    except Exception as e:
+        print(f"Warning: failed to parse {config_path}: {e}")
+        return []
+
+    agents = []
+    for entry in data.get("agents", []):
+        name = str(entry.get("name", "")).strip()
+        if not name:
+            continue
+        agents.append(
+            {
+                "name": name,
+                "description": str(entry.get("description", "")).strip(),
+            }
+        )
+    return agents
 
 
 def get_agent(session_id: str) -> Agent:
@@ -642,6 +682,22 @@ async def root():
     return {"message": "Airi Agent API is running", "status": "healthy"}
 
 
+@app.get("/api/agents")
+async def list_agents():
+    agents = load_agent_catalog()
+    if not agents:
+        raise HTTPException(status_code=404, detail="No agents defined in agents.toml")
+    return {"agents": agents}
+
+
+@app.get("/agents", include_in_schema=False)
+async def list_agents_compat():
+    agents = load_agent_catalog()
+    if not agents:
+        raise HTTPException(status_code=404, detail="No agents defined in agents.toml")
+    return {"agents": agents}
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     try:
@@ -661,17 +717,22 @@ async def chat(request: ChatRequest):
 
         local_agent = get_agent(session_id=request.session_id)
         full_message, _ = build_message_with_files(request.message, request.files, images)
+
+        recall_context = await recall_for_prompt(full_message)
+        if recall_context:
+            full_message = f"{recall_context}\n\n{full_message}"
+
         response = await local_agent.arun(full_message, images=images)
 
         file_names = [f.name for f in request.files] if request.files else None
         save_chat_log(request.session_id, request.message, response.content, file_names)
+        capture_and_notify(request.session_id, request.message, response.content)
 
         return ChatResponse(response=response.content)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
@@ -682,6 +743,75 @@ async def websocket_chat(websocket: WebSocket):
         await websocket.close()
         return
 
+    generation_task: Optional[asyncio.Task] = None
+
+    async def run_generation(
+        ws: WebSocket,
+        session_id: str,
+        message: str,
+        files: List[FileAttachment],
+        images: List[Image],
+    ) -> None:
+        full_response_text = ""
+        try:
+            local_agent = get_agent(session_id=session_id)
+            await ws.send_json({"type": "start"})
+
+            start_time = time.perf_counter()
+
+            full_message, _ = build_message_with_files(message, files, images)
+
+            recall_context = await recall_for_prompt(full_message)
+            if recall_context:
+                full_message = f"{recall_context}\n\n{full_message}"
+
+            response_iterator = local_agent.arun(
+                full_message, images=images, stream=True
+            )
+
+            last_chunk = None
+
+            async for chunk in response_iterator:
+                content = ""
+                if hasattr(chunk, "content") and chunk.content:
+                    content = chunk.content
+                elif isinstance(chunk, str):
+                    content = chunk
+
+                if content:
+                    full_response_text += content
+                    await ws.send_json({"type": "chunk", "content": content})
+                last_chunk = chunk
+
+            generation_time = time.perf_counter() - start_time
+
+            token_count = 0
+            if last_chunk and hasattr(last_chunk, "metrics") and last_chunk.metrics:
+                token_count = last_chunk.metrics.total_tokens or 0
+
+            if full_response_text:
+                speak_response(full_response_text)
+
+            file_names = [f.name for f in files] if files else None
+            save_chat_log(session_id, message, full_response_text, file_names)
+            capture_and_notify(session_id, message, full_response_text)
+
+            await ws.send_json(
+                {
+                    "type": "end",
+                    "token_count": int(token_count),
+                    "generation_time": generation_time,
+                }
+            )
+        except asyncio.CancelledError:
+            print("Generation stopped by user")
+            file_names = [f.name for f in files] if files else None
+            save_chat_log(session_id, message, full_response_text, file_names)
+            await ws.send_json({"type": "stopped"})
+        except Exception as e:
+            print(f"Processing error: {e}")
+            await ws.send_json({"type": "error", "message": str(e)})
+
     try:
         while True:
             data = await websocket.receive_json()
@@ -689,6 +819,11 @@ async def websocket_chat(websocket: WebSocket):
             if data.get("action") == "stop_speech":
                 stop_audio()
                 await websocket.send_json({"type": "speech_stopped"})
+                continue
+
+            if data.get("action") == "stop_generation":
+                if generation_task is not None and not generation_task.done():
+                    generation_task.cancel()
                 continue
 
             message = ""
@@ -756,63 +891,21 @@ async def websocket_chat(websocket: WebSocket):
 
                 continue
 
-            try:
-                local_agent = get_agent(session_id=session_id)
-                await websocket.send_json({"type": "start"})
+            if generation_task is not None and not generation_task.done():
+                generation_task.cancel()
 
-                start_time = time.perf_counter()
-
-                full_message, _ = build_message_with_files(
-                    message, attached_files, images
-                )
-                response_iterator = local_agent.arun(
-                    full_message, images=images, stream=True
-                )
-
-                full_response_text = ""
-                last_chunk = None
-
-                async for chunk in response_iterator:
-                    content = ""
-                    if hasattr(chunk, "content") and chunk.content:
-                        content = chunk.content
-                    elif isinstance(chunk, str):
-                        content = chunk
-
-                    if content:
-                        full_response_text += content
-                        await websocket.send_json({"type": "chunk", "content": content})
-                    last_chunk = chunk
-
-                generation_time = time.perf_counter() - start_time
-
-                token_count = 0
-                if last_chunk and hasattr(last_chunk, "metrics") and last_chunk.metrics:
-                    token_count = last_chunk.metrics.total_tokens or 0
-
-                if full_response_text:
-                    speak_response(full_response_text)
-                    file_names = (
-                        [f.name for f in attached_files] if attached_files else None
-                    )
-                    save_chat_log(session_id, message, full_response_text, file_names)
-
-                await websocket.send_json(
-                    {
-                        "type": "end",
-                        "token_count": int(token_count),
-                        "generation_time": generation_time,
-                    }
-                )
-
-            except Exception as e:
-                print(f"Processing error: {e}")
-                await websocket.send_json({"type": "error", "message": str(e)})
+            generation_task = asyncio.create_task(
+                run_generation(websocket, session_id, message, attached_files, images)
+            )
 
     except WebSocketDisconnect:
+        if generation_task is not None:
+            generation_task.cancel()
         print("Client disconnected")
         stop_audio()
     except Exception as e:
+        if generation_task is not None:
+            generation_task.cancel()
         print(f"WebSocket error: {e}")
         stop_audio()
 

@@ -1137,20 +1137,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m = m.syncLayout()
 				return m, nil
 			}
-			if m.isLoading || m.currentAiChunk != "" {
-				stopGenerationCmd := func() tea.Msg {
-					req := ChatRequest{
-						SessionID: m.sessionID,
-						Action:    "stop_generation",
-					}
-					_ = m.conn.WriteJSON(req)
-					return nil
-				}
-				m.notification = "⏹ Stopping generation..."
-				return m, tea.Batch(stopGenerationCmd, tea.Tick(3*time.Second, func(_ time.Time) tea.Msg {
-					return clearNotificationMsg{}
-				}))
-			}
 			if m.isRecording && m.recordCmd != nil {
 				_ = m.recordCmd.Process.Kill()
 			}
@@ -1579,25 +1565,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "speech_stopped":
 			m.isSpeaking = false
 
-		case "stopped":
-			if m.currentAiChunk != "" {
-				m.messages = append(m.messages, createAiMessageFunc(m.currentAiChunk))
-				m.messageCount++
-				m.currentAiChunk = ""
-			}
-			m.isLoading = false
-			m.awaitingVoiceChunk = false
-			m.pendingVoiceInput = ""
-			m.notification = "⏹ Generation stopped"
-			m = m.updateViewportContent()
-			m.viewport.GotoBottom()
-			return m, tea.Batch(
-				waitForIncomingMessage(m.conn),
-				tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
-					return clearNotificationMsg{}
-				}),
-			)
-
 		case "error":
 			m.messages = append(m.messages, createErrorMessageFunc("Error: "+msg.Message))
 			m = m.updateViewportContent()
@@ -1687,7 +1654,6 @@ func (m model) View() string {
   ctrl + v   Paste image from clipboard (attach as new attachment)
   ctrl + y   Copy last Airi response to clipboard
   ctrl + d   Clear all staged file attachments
-  esc        Stop the current AI response generation
   ctrl + c   Quit
 
 %s
